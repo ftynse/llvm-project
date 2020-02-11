@@ -20,6 +20,7 @@ add_llvm_library(MLIRLinalgTransforms
   Fusion.cpp
   LinalgTransforms.cpp
   LinalgToLoops.cpp
+  MDH.cpp
   Promotion.cpp
   Tiling.cpp
 
