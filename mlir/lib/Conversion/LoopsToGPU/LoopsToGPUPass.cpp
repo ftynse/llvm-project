@@ -8,7 +8,7 @@
 
 #include "mlir/Conversion/LoopsToGPU/LoopsToGPUPass.h"
 #include "mlir/Conversion/LoopsToGPU/LoopsToGPU.h"
-#include "mlir/Dialect/AffineOps/AffineOps.h"
+#include "mlir/Dialect/Affine/AffineOps.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
 #include "mlir/Dialect/LoopOps/LoopOps.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"

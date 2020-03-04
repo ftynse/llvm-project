@@ -24,13 +24,13 @@ add_llvm_library(MLIRAnalysis
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Analysis
   )
 add_dependencies(MLIRAnalysis
-  MLIRAffineOps
+  MLIRAffine
   MLIRCallOpInterfacesIncGen
   MLIRTypeInferOpInterfaceIncGen
   MLIRLoopOps
   )
 
-target_link_libraries(MLIRAnalysis MLIRAffineOps MLIRLoopOps)
+target_link_libraries(MLIRAnalysis MLIRAffine MLIRLoopOps)
 
 add_llvm_library(MLIRLoopAnalysis
   AffineAnalysis.cpp
@@ -43,10 +43,10 @@ add_llvm_library(MLIRLoopAnalysis
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Analysis
   )
 add_dependencies(MLIRLoopAnalysis
-  MLIRAffineOps
+  MLIRAffine
   MLIRCallOpInterfacesIncGen
   MLIRTypeInferOpInterfaceIncGen
   MLIRLoopOps
   )
 
-target_link_libraries(MLIRLoopAnalysis MLIRAffineOps MLIRLoopOps)
+target_link_libraries(MLIRLoopAnalysis MLIRAffine MLIRLoopOps)

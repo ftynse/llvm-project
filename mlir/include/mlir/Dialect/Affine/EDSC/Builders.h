@@ -14,7 +14,7 @@
 #ifndef MLIR_DIALECT_AFFINEOPS_EDSC_BUILDERS_H_
 #define MLIR_DIALECT_AFFINEOPS_EDSC_BUILDERS_H_
 
-#include "mlir/Dialect/AffineOps/AffineOps.h"
+#include "mlir/Dialect/Affine/AffineOps.h"
 #include "mlir/EDSC/Builders.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Types.h"

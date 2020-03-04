@@ -13,7 +13,7 @@
 #ifndef LINALG_OPS
 #define LINALG_OPS
 
-include "mlir/Dialect/AffineOps/AffineOpsBase.td"
+include "mlir/Dialect/Affine/AffineOpsBase.td"
 include "mlir/Dialect/Linalg/IR/LinalgBase.td"
 
 // Base class for Linalg dialect ops that do not correspond to library calls.

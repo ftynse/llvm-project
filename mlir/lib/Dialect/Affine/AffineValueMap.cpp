@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/AffineOps/AffineValueMap.h"
-#include "mlir/Dialect/AffineOps/AffineOps.h"
+#include "mlir/Dialect/Affine/AffineValueMap.h"
+#include "mlir/Dialect/Affine/AffineOps.h"
 
 using namespace mlir;
 

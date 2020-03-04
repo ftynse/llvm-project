@@ -7,7 +7,7 @@ add_mlir_conversion_library(MLIRAffineToStandard
 add_dependencies(
   MLIRAffineToStandard
 
-  MLIRAffineOps
+  MLIRAffine
   MLIRStandardOps
   MLIRIR
   LLVMCore
@@ -16,7 +16,7 @@ add_dependencies(
 target_link_libraries(
   MLIRAffineToStandard
 
-  MLIRAffineOps
+  MLIRAffine
   MLIRLoopOps
   MLIRPass
   MLIRStandardOps

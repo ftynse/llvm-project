@@ -15,8 +15,8 @@
 #include "mlir/Analysis/AffineAnalysis.h"
 #include "mlir/Analysis/AffineStructures.h"
 #include "mlir/Analysis/NestedMatcher.h"
-#include "mlir/Dialect/AffineOps/AffineOps.h"
-#include "mlir/Dialect/AffineOps/AffineValueMap.h"
+#include "mlir/Dialect/Affine/AffineOps.h"
+#include "mlir/Dialect/Affine/AffineValueMap.h"
 #include "mlir/Support/MathExtras.h"
 
 #include "llvm/ADT/DenseSet.h"

@@ -20,7 +20,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Analysis/Utils.h"
-#include "mlir/Dialect/AffineOps/AffineOps.h"
+#include "mlir/Dialect/Affine/AffineOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/LoopUtils.h"

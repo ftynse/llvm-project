@@ -14,7 +14,7 @@
 #define VECTOR_OPS
 
 include "mlir/IR/OpBase.td"
-include "mlir/Dialect/AffineOps/AffineOpsBase.td"
+include "mlir/Dialect/Affine/AffineOpsBase.td"
 
 def Vector_Dialect : Dialect {
   let name = "vector";

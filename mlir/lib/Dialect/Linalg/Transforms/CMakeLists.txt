@@ -1,6 +1,6 @@
 set(LIBS
 
-  MLIRAffineOps
+  MLIRAffine
   MLIRAnalysis
   MLIREDSC
   MLIRIR

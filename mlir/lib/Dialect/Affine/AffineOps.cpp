@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/AffineOps/AffineOps.h"
-#include "mlir/Dialect/AffineOps/AffineValueMap.h"
+#include "mlir/Dialect/Affine/AffineOps.h"
+#include "mlir/Dialect/Affine/AffineValueMap.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Function.h"
 #include "mlir/IR/IntegerSet.h"
@@ -86,7 +86,7 @@ AffineOpsDialect::AffineOpsDialect(MLIRContext *context)
   addOperations<AffineApplyOp, AffineDmaStartOp, AffineDmaWaitOp, AffineLoadOp,
                 AffineStoreOp,
 #define GET_OP_LIST
-#include "mlir/Dialect/AffineOps/AffineOps.cpp.inc"
+#include "mlir/Dialect/Affine/AffineOps.cpp.inc"
                 >();
   addInterfaces<AffineInlinerInterface, AffineSideEffectsInterface>();
 }
@@ -2405,4 +2405,4 @@ static ParseResult parseAffineParallelOp(OpAsmParser &parser,
 //===----------------------------------------------------------------------===//
 
 #define GET_OP_CLASSES
-#include "mlir/Dialect/AffineOps/AffineOps.cpp.inc"
+#include "mlir/Dialect/Affine/AffineOps.cpp.inc"

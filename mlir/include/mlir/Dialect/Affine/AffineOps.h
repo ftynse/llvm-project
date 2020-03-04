@@ -554,7 +554,7 @@ void fullyComposeAffineMapAndOperands(AffineMap *map,
                                       SmallVectorImpl<Value> *operands);
 
 #define GET_OP_CLASSES
-#include "mlir/Dialect/AffineOps/AffineOps.h.inc"
+#include "mlir/Dialect/Affine/AffineOps.h.inc"
 
 /// Returns if the provided value is the induction variable of a AffineForOp.
 bool isForInductionVar(Value val);

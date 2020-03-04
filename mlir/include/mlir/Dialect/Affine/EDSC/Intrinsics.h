@@ -8,7 +8,7 @@
 #ifndef MLIR_DIALECT_AFFINEOPS_EDSC_INTRINSICS_H_
 #define MLIR_DIALECT_AFFINEOPS_EDSC_INTRINSICS_H_
 
-#include "mlir/Dialect/AffineOps/EDSC/Builders.h"
+#include "mlir/Dialect/Affine/EDSC/Builders.h"
 #include "mlir/EDSC/Intrinsics.h"
 
 namespace mlir {
