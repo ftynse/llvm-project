@@ -401,6 +401,97 @@ private:
   Block::iterator insertPoint;
 };
 
+class OpBuilderMixin : public Builder {
+public:
+  explicit OpBuilderMixin(MLIRContext *context)
+      : Builder(context), builder(nullptr) {}
+  OpBuilder &getBuilder() { return *builder; }
+
+  template <typename OpTy, typename... Args>
+  OpTy create(Location loc, Args &&... args) {
+    return builder->create<OpTy>(loc, std::forward<Args>(args)...);
+  }
+
+protected:
+  class WithBuilder;
+  WithBuilder withBuilder(OpBuilder &builder) {
+    return WithBuilder(*this, builder);
+  }
+
+  class WithBuilder {
+    friend WithBuilder OpBuilderMixin::withBuilder(OpBuilder &);
+
+  public:
+    ~WithBuilder() { mixin.builder = previousBuilder; }
+
+  protected:
+    explicit WithBuilder(OpBuilderMixin &m, OpBuilder &builder) : mixin(m) {
+      previousBuilder = mixin.builder;
+      mixin.builder = &builder;
+    }
+    WithBuilder(const WithBuilder &) = delete;
+    WithBuilder(WithBuilder &&) = delete;
+
+  private:
+    OpBuilderMixin &mixin;
+    OpBuilder *previousBuilder;
+  };
+
+private:
+  OpBuilder *builder;
+};
+
+class PinnableOpBuilderMixin : public OpBuilderMixin {
+public:
+  explicit PinnableOpBuilderMixin(MLIRContext *context)
+      : OpBuilderMixin(context), location(UnknownLoc::get(context)) {}
+  Location getLoc() { return location; }
+
+  template <typename OpTy, typename... Args> OpTy create(Args &&... args) {
+    return OpBuilderMixin::create<OpTy, Args...>(location,
+                                                 std::forward<Args>(args)...);
+  }
+
+protected:
+  class PinLocation;
+  PinLocation pinLocation(Location loc) {
+    return PinLocation(*this, loc);
+  }
+
+  class PinLocation {
+    friend PinLocation PinnableOpBuilderMixin::pinLocation(Location);
+  public:
+    ~PinLocation() { mixin.location = previousLocation; }
+  protected:
+    explicit PinLocation(PinnableOpBuilderMixin &m, Location loc)
+        : mixin(m), previousLocation(m.location) {
+      mixin.location = loc;
+    }
+
+  private:
+    PinnableOpBuilderMixin &mixin;
+    Location previousLocation;
+  };
+
+  class PinLocationWithBuilder;
+  PinLocationWithBuilder pinLocationWithBuilder(OpBuilder &builder,
+                                                Location loc) {
+    return PinLocationWithBuilder(*this, builder, loc);
+  }
+
+  class PinLocationWithBuilder : public PinLocation, WithBuilder {
+    friend PinLocationWithBuilder
+    PinnableOpBuilderMixin::pinLocationWithBuilder(OpBuilder &, Location);
+
+    explicit PinLocationWithBuilder(PinnableOpBuilderMixin &m, OpBuilder &b,
+                                    Location loc)
+        : PinLocation(m, loc), WithBuilder(m, b) {}
+  };
+
+private:
+  Location location;
+};
+
 } // namespace mlir
 
 #endif
