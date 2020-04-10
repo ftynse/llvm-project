@@ -55,6 +55,30 @@ void ForOp::build(Builder *builder, OperationState &result, Value lb, Value ub,
     bodyRegion->front().addArgument(v.getType());
 }
 
+void ForOp::build(
+    Builder *builder, OperationState &result, Value lowerBound,
+    Value upperBound, Value step, ValueRange iterArgs,
+    llvm::function_ref<void(OpBuilder *, Value, ValueRange)> bodyBuilder) {
+  result.addOperands({lowerBound, upperBound, step});
+  result.addOperands(iterArgs);
+  if (!iterArgs.empty())
+    result.addTypes(iterArgs.getTypes());
+  Region *bodyRegion = result.addRegion();
+
+  OpBuilder *opBuilder = static_cast<OpBuilder *>(builder);
+  {
+    OpBuilder::InsertionGuard raii(*opBuilder);
+    Block *bodyBlock = new Block;
+    bodyRegion->getBlocks().push_back(bodyBlock);
+    opBuilder->setInsertionPoint(bodyBlock, bodyBlock->begin());
+
+    auto iter = bodyBlock->addArgument(builder->getIndexType());
+    if (!iterArgs.empty())
+      bodyBlock->addArguments(iterArgs.getTypes());
+    bodyBuilder(opBuilder, iter, bodyBlock->getArguments().drop_front());
+  }
+}
+
 static LogicalResult verify(ForOp op) {
   if (auto cst = dyn_cast_or_null<ConstantIndexOp>(op.step().getDefiningOp()))
     if (cst.getValue() <= 0)

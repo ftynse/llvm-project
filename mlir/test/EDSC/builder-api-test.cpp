@@ -60,6 +60,7 @@ static FuncOp makeFunction(StringRef name, ArrayRef<Type> results = {},
   return function;
 }
 
+#if 0
 TEST_FUNC(builder_dynamic_for_func_args) {
   auto indexType = IndexType::get(&globalContext());
   auto f32Type = FloatType::getF32(&globalContext());
@@ -1073,6 +1074,86 @@ TEST_FUNC(memref_vector_matmul_test) {
 
   f.print(llvm::outs());
   f.erase();
+}
+#endif
+
+TEST_FUNC(for_region_builder) {
+  auto indexTy = IndexType::get(&globalContext());
+  auto f = makeFunction("loop", {}, {indexTy, indexTy, indexTy});
+  auto loc = f.getLoc();
+  auto lb = f.getArgument(0);
+  auto ub = f.getArgument(1);
+  auto step = f.getArgument(2);
+
+  // clang-format off
+  OpBuilder builder(f.getBody());
+  builder.create<loop::ForOp>(loc, lb, ub, step, ValueRange(),
+    [loc,ub,step](OpBuilder *nested, Value i, ValueRange) {
+      nested->create<loop::ForOp>(loc, i, ub, step, ValueRange(),
+        [loc,i](OpBuilder *moreNested, Value j, ValueRange) {
+          moreNested->create<AddIOp>(loc, i, j);
+          moreNested->create<loop::YieldOp>(loc);
+        });
+      nested->create<loop::YieldOp>(loc);
+    });
+  // clang-format on
+
+  f.print(llvm::outs());
+  f.erase();
+  llvm::outs() << "\n\n";
+}
+
+loop::ForOp createForLoopNestImpl(
+    Location loc, OpBuilder *builder, ValueRange lbs, ValueRange ubs,
+    ValueRange steps,
+    llvm::function_ref<void(OpBuilder *, ValueRange)> bodyBuilder,
+    SmallVectorImpl<Value> &iters) {
+  return builder->create<loop::ForOp>(
+      loc, lbs[0], ubs[0], steps[0], ValueRange(),
+      [loc, lbs, ubs, steps, bodyBuilder, &iters](OpBuilder *nested, Value iter,
+                                                  ValueRange) {
+        iters.push_back(iter);
+        if (lbs.size() > 1) {
+          createForLoopNestImpl(loc, nested, lbs.drop_front(), ubs.drop_front(),
+                                steps.drop_front(), bodyBuilder, iters);
+        } else {
+          bodyBuilder(nested, iters);
+        }
+        nested->create<loop::YieldOp>(loc);
+      });
+}
+
+loop::ForOp createForLoopNest(
+    Location loc, OpBuilder *builder, ValueRange lbs, ValueRange ubs,
+    ValueRange steps,
+    llvm::function_ref<void(OpBuilder *, ValueRange)> bodyBuilder) {
+  llvm::SmallVector<Value, 8> iters;
+  return createForLoopNestImpl(loc, builder, lbs, ubs, steps, bodyBuilder,
+                               iters);
+}
+
+TEST_FUNC(nested_for_builder) {
+  auto indexTy = IndexType::get(&globalContext());
+  auto f = makeFunction("loop", {}, {indexTy, indexTy, indexTy});
+  auto loc = f.getLoc();
+  Value lb = f.getArgument(0);
+  Value ub = f.getArgument(1);
+  Value step = f.getArgument(2);
+
+  OpBuilder builder(f.getBody());
+  createForLoopNest(loc, &builder, {lb, lb, lb, lb, lb}, {ub, ub, ub, ub, ub},
+                    {step, step, step, step, step},
+                    [loc](OpBuilder *nested, ValueRange iters) {
+                      Value v0 =
+                          nested->create<AddIOp>(loc, iters[0], iters[1]);
+                      Value v1 = nested->create<AddIOp>(loc, v0, iters[2]);
+                      Value v2 = nested->create<AddIOp>(loc, v1, iters[3]);
+                      nested->create<AddIOp>(loc, v2, iters[4]);
+                    });
+
+  f.print(llvm::outs());
+  f.erase();
+  llvm::outs() << "\n\n";
 }
 
 int main() {

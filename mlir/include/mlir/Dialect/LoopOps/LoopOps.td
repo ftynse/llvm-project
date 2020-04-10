@@ -135,7 +135,11 @@ def ForOp : Loop_Op<"for",
   let builders = [
     OpBuilder<"Builder *builder, OperationState &result, "
               "Value lowerBound, Value upperBound, Value step, "
-              "ValueRange iterArgs = llvm::None">
+              "ValueRange iterArgs = llvm::None">,
+    OpBuilder<"Builder *builder, OperationState &result, "
+              "Value lowerBound, Value upperBound, Value step, "
+              "ValueRange iterArgs, "
+              "llvm::function_ref<void(OpBuilder *, Value, ValueRange)> bodyBuilder">
   ];
 
   let extraClassDeclaration = [{
