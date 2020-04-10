@@ -1223,6 +1223,75 @@ TEST_FUNC(nested_builders_and_mixins) {
   llvm::outs() << "\n\n";
 }
 
+template <typename Derived> class StdDialectBuilder {
+  PinnableOpBuilderMixin &m() {
+    return static_cast<PinnableOpBuilderMixin &>(static_cast<Derived &>(*this));
+  }
+
+public:
+  ConstantIndexOp std_constant_index(int64_t value) {
+    return m().template create<ConstantIndexOp>(value);
+  }
+
+  AddIOp std_addi(Value lhs, Value rhs) {
+    return m().template create<AddIOp>(lhs, rhs);
+  }
+
+  ReturnOp std_return(ValueRange args = {}) {
+    return m().template create<ReturnOp>(args);
+  }
+};
+
+template <typename Derived> class LoopDialectBuilder {
+  PinnableOpBuilderMixin &m() {
+    return static_cast<PinnableOpBuilderMixin &>(static_cast<Derived &>(*this));
+  }
+
+public:
+  loop::ForOp loop_for(Value lb, Value ub, Value step, ValueRange iterArgs,
+                       RegionBuilder body) {
+    return m().template create<loop::ForOp>(lb, ub, step, iterArgs, body);
+  }
+
+  loop::YieldOp loop_yield(ValueRange args = {}) {
+    return m().template create<loop::YieldOp>(args);
+  }
+};
+
+class DslStyleIRBuildingClass
+    : public PinnableOpBuilderMixin,
+      public StdDialectBuilder<DslStyleIRBuildingClass>,
+      public LoopDialectBuilder<DslStyleIRBuildingClass> {
+public:
+  using PinnableOpBuilderMixin::PinnableOpBuilderMixin;
+
+  void build(OpBuilder &builder, Location loc) {
+    auto raii = pinLocationWithBuilder(builder, loc);
+
+    auto zero = std_constant_index(0);
+    auto fourtytwo = std_constant_index(42);
+    auto one = std_constant_index(1);
+    loop_for(zero, fourtytwo, one, {}, region([this](ValueRange args) {
+               std_addi(args[0], args[0]);
+               loop_yield();
+             }));
+    std_return();
+  }
+};
+
+TEST_FUNC(dsl_style_builder) {
+  auto f = makeFunction("loop", {}, {});
+  auto loc = f.getLoc();
+  OpBuilder builder(f.getBody());
+
+  DslStyleIRBuildingClass x(&globalContext());
+  x.build(builder, loc);
+
+  f.print(llvm::outs());
+  f.erase();
+  llvm::outs() << "\n\n";
+}
+
 int main() {
   RUN_TESTS();
   return 0;
