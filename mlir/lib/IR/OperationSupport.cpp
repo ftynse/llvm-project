@@ -13,6 +13,7 @@
 
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/Block.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
 using namespace mlir;
 
@@ -56,6 +57,21 @@ Region *OperationState::addRegion() {
 
 void OperationState::addRegion(std::unique_ptr<Region> &&region) {
   regions.push_back(std::move(region));
+}
+
+void OperationState::addRegion(RegionBuilder &regionBuilder) {
+  addRegion(regionBuilder, {});
+}
+
+void OperationState::addRegion(RegionBuilder &regionBuilder, TypeRange types) {
+  regions.emplace_back(new Region);
+  if (!regionBuilder.regionFiller)
+    return;
+
+  auto *block = new Block;
+  block->addArguments(types);
+  regions.back()->getBlocks().push_back(block);
+  regionBuilder.build(*regions.back(), block->getArguments());
 }
 
 //===----------------------------------------------------------------------===//

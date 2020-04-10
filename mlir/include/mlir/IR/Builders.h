@@ -401,6 +401,20 @@ private:
   Block::iterator insertPoint;
 };
 
+struct RegionBuilder {
+  llvm::function_ref<void(ValueRange)> regionFiller;
+  OpBuilder *builder;
+
+  void build(Region &region, ValueRange args) {
+    if (!regionFiller)
+      return;
+
+    OpBuilder::InsertionGuard raii(*builder);
+    builder->setInsertionPointToStart(&region.front());
+    regionFiller(args);
+  }
+};
+
 class OpBuilderMixin : public Builder {
 public:
   explicit OpBuilderMixin(MLIRContext *context)
@@ -410,6 +424,19 @@ public:
   template <typename OpTy, typename... Args>
   OpTy create(Location loc, Args &&... args) {
     return builder->create<OpTy>(loc, std::forward<Args>(args)...);
+  }
+
+  RegionBuilder region(llvm::function_ref<void(ValueRange)> regionFiller) {
+    RegionBuilder res;
+    res.regionFiller = regionFiller;
+    res.builder = &getBuilder();
+    return res;
+  }
+
+  RegionBuilder emptyRegion() {
+    RegionBuilder res;
+    res.regionFiller = nullptr;
+    return res;
   }
 
 protected:

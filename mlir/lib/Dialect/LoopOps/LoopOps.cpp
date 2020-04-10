@@ -79,6 +79,19 @@ void ForOp::build(
   }
 }
 
+void ForOp::build(Builder *builder, OperationState &result, Value lowerBound,
+                  Value upperBound, Value step, ValueRange iterArgs,
+                  RegionBuilder bodyBuilder) {
+  result.addOperands({lowerBound, upperBound, step});
+  result.addOperands(iterArgs);
+  if (!iterArgs.empty())
+    result.addTypes(iterArgs.getTypes());
+
+  SmallVector<Type, 4> argTypes({lowerBound.getType()});
+  argTypes.append(result.types.begin(), result.types.end());
+  result.addRegion(bodyBuilder, argTypes);
+}
+
 static LogicalResult verify(ForOp op) {
   if (auto cst = dyn_cast_or_null<ConstantIndexOp>(op.step().getDefiningOp()))
     if (cst.getValue() <= 0)

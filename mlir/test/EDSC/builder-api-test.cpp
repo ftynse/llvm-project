@@ -1189,6 +1189,40 @@ TEST_FUNC(mixin_style_builder) {
   llvm::outs() << "\n\n";
 }
 
+struct OtherIRBuildingClass : public PinnableOpBuilderMixin {
+  OtherIRBuildingClass(MLIRContext *context)
+      : PinnableOpBuilderMixin(context) {}
+
+  void build(OpBuilder &builder, Location loc);
+};
+
+void OtherIRBuildingClass::build(OpBuilder &builder, Location loc) {
+  auto raii = pinLocationWithBuilder(builder, loc);
+
+  Value zero = create<ConstantIndexOp>(0);
+  Value fortytwo = create<ConstantIndexOp>(42);
+  Value one = create<ConstantIndexOp>(1);
+  create<loop::ForOp>(zero, fortytwo, one, ValueRange(),
+                      region([this](ValueRange args) {
+                        create<AddIOp>(args[0], args[0]);
+                        create<loop::YieldOp>();
+                      }));
+  create<ReturnOp>();
+}
+
+TEST_FUNC(nested_builders_and_mixins) {
+  auto f = makeFunction("loop", {}, {});
+  auto loc = f.getLoc();
+  OpBuilder builder(f.getBody());
+
+  OtherIRBuildingClass x(&globalContext());
+  x.build(builder, loc);
+
+  f.print(llvm::outs());
+  f.erase();
+  llvm::outs() << "\n\n";
+}
+
 int main() {
   RUN_TESTS();
   return 0;

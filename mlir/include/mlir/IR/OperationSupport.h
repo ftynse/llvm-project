@@ -38,6 +38,7 @@ class OpFoldResult;
 class ParseResult;
 class Pattern;
 class Region;
+class RegionBuilder;
 class ResultRange;
 class RewritePattern;
 class SuccessorRange;
@@ -258,6 +259,8 @@ inline llvm::hash_code hash_value(OperationName arg) {
 // OperationState
 //===----------------------------------------------------------------------===//
 
+class TypeRange;
+
 /// This represents an operation in an abstracted form, suitable for use with
 /// the builder APIs.  This object is a large and heavy weight object meant to
 /// be used as a temporary object on the stack.  It is generally unwise to put
@@ -329,6 +332,9 @@ public:
   /// region will be transferred when the Operation is constructed.  If the
   /// region is null, a new empty region will be attached to the Operation.
   void addRegion(std::unique_ptr<Region> &&region);
+
+  void addRegion(RegionBuilder &regionBuilder);
+  void addRegion(RegionBuilder &regionBuilder, TypeRange types);
 
   /// Sets the operand list of the operation as resizable.
   void setOperandListToResizable(bool isResizable = true) {
