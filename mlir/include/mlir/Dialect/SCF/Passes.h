@@ -21,6 +21,9 @@ namespace mlir {
 /// vectorization.
 std::unique_ptr<Pass> createForLoopSpecializationPass();
 
+/// Creates a pass that distributes parallel loops around a barrier if possible.
+std::unique_ptr<Pass> createParallelLoopDistributionPass();
+
 /// Creates a loop fusion pass which fuses parallel loops.
 std::unique_ptr<Pass> createParallelLoopFusionPass();
 

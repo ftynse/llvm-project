@@ -17,6 +17,11 @@ def SCFForLoopSpecialization
   let constructor = "mlir::createForLoopSpecializationPass()";
 }
 
+def SCFParallelLoopDistribution : FunctionPass<"parallel-loop-distribution"> {
+  let summary = "Distribute parallel loops around a barrier";
+  let constructor = "mlir::createParallelLoopDistributionPass();";
+}
+
 def SCFParallelLoopFusion : Pass<"parallel-loop-fusion"> {
   let summary = "Fuse adjacent parallel loops";
   let constructor = "mlir::createParallelLoopFusionPass()";
