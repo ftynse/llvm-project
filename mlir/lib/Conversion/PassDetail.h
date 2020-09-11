@@ -37,6 +37,10 @@ namespace ROCDL {
 class ROCDLDialect;
 } // end namespace ROCDL
 
+namespace omp {
+class OpenMPDialect;
+} // end namespace omp
+
 namespace scf {
 class SCFDialect;
 } // end namespace scf

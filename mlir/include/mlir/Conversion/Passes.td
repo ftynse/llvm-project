@@ -232,6 +232,17 @@ def ConvertParallelLoopToGpu : Pass<"convert-parallel-loops-to-gpu"> {
 }
 
 //===----------------------------------------------------------------------===//
+// SCFToOpenMP
+//===----------------------------------------------------------------------===//
+
+def ConvertSCFToOpenMP : Pass<"convert-scf-to-openmp"> {
+  let summary = "Convert top-level SCF Parallel loops to OpenMP parallel ops";
+  let constructor = "mlir::createSCFToOpenMPPass();";
+  let dependentDialects = ["omp::OpenMPDialect", "scf::SCFDialect",
+                           "StandardOpsDialect"];
+}
+
+//===----------------------------------------------------------------------===//
 // ShapeToStandard
 //===----------------------------------------------------------------------===//
 
