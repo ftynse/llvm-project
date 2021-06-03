@@ -11,6 +11,7 @@
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/MathExtras.h"
 #include "mlir/Transforms/InliningUtils.h"
@@ -1958,6 +1959,69 @@ void ParallelOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                              MLIRContext *context) {
   results.add<CollapseSingleIterationLoops, RemoveEmptyParallelLoops,
               MergeNestedParallelLoops>(context);
+}
+
+//===----------------------------------------------------------------------===//
+// BarrierOp
+//===----------------------------------------------------------------------===//
+void print(OpAsmPrinter &out, BarrierOp) {
+  out << BarrierOp::getOperationName();
+}
+
+LogicalResult verify(BarrierOp) { return success(); }
+
+ParseResult parseBarrierOp(OpAsmParser &, OperationState &) {
+  return success();
+}
+
+/// Collect the memory effects of the given op in 'effects'. Returns 'true' it
+/// could extract the effect information from the op, otherwise returns 'false'
+/// and conservatively populates the list with all possible effects.
+static bool
+collectEffects(Operation *op,
+               SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  // Skip over barriers to avoid infinite recursion (those barriers would ask
+  // this barrier again).
+  if (isa<BarrierOp>(op))
+    return true;
+
+  // Collect effect instances the operation. Note that the implementation of
+  // getEffects erases all effect instances that have the type other than the
+  // template parameter so we collect them first in a local buffer and then
+  // copy.
+  SmallVector<MemoryEffects::EffectInstance> localEffects;
+  if (auto iface = dyn_cast<MemoryEffectOpInterface>(op)) {
+    iface.getEffects<MemoryEffects::Read>(localEffects);
+    llvm::append_range(effects, localEffects);
+    iface.getEffects<MemoryEffects::Write>(localEffects);
+    llvm::append_range(effects, localEffects);
+    iface.getEffects<MemoryEffects::Allocate>(localEffects);
+    llvm::append_range(effects, localEffects);
+    iface.getEffects<MemoryEffects::Free>(localEffects);
+    llvm::append_range(effects, localEffects);
+    return true;
+  }
+
+  // We need to be conservative here in case the op doesn't have the interface
+  // and assume it can have any possible effect.
+  effects.emplace_back(MemoryEffects::Effect::get<MemoryEffects::Read>());
+  effects.emplace_back(MemoryEffects::Effect::get<MemoryEffects::Write>());
+  effects.emplace_back(MemoryEffects::Effect::get<MemoryEffects::Allocate>());
+  effects.emplace_back(MemoryEffects::Effect::get<MemoryEffects::Free>());
+  return false;
+}
+
+void BarrierOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  Operation *op = getOperation();
+  for (Operation *it = op->getPrevNode(); it != nullptr; it = it->getPrevNode())
+    if (!collectEffects(it, effects))
+      return;
+  for (Operation *it = op->getNextNode(); it != nullptr; it = it->getNextNode())
+    if (!collectEffects(it, effects))
+      return;
+
+  // TODO: we need to handle regions in case the parent op isn't an SCF parallel
 }
 
 //===----------------------------------------------------------------------===//
