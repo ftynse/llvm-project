@@ -2011,17 +2011,31 @@ collectEffects(Operation *op,
   return false;
 }
 
+bool collectUntilBarrier(
+    Operation *op, function_ref<Operation *(Operation *)> next,
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  for (Operation *current = op;
+       current != nullptr && !isa<scf::ParallelOp>(current);
+       current = current->getParentOp()) {
+    for (Operation *it = next(current); it != nullptr; it = next(it)) {
+      if (isa<BarrierOp>(it))
+        return true;
+
+      if (!collectEffects(it, effects))
+        return false;
+    }
+  }
+  return true;
+}
+
 void BarrierOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   Operation *op = getOperation();
-  for (Operation *it = op->getPrevNode(); it != nullptr; it = it->getPrevNode())
-    if (!collectEffects(it, effects))
-      return;
-  for (Operation *it = op->getNextNode(); it != nullptr; it = it->getNextNode())
-    if (!collectEffects(it, effects))
-      return;
-
-  // TODO: we need to handle regions in case the parent op isn't an SCF parallel
+  if (!collectUntilBarrier(
+          op, [](Operation *o) { return o->getPrevNode(); }, effects))
+    return;
+  collectUntilBarrier(
+      op, [](Operation *o) { return o->getNextNode(); }, effects);
 }
 
 //===----------------------------------------------------------------------===//
