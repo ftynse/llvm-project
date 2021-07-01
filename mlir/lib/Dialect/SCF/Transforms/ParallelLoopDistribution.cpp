@@ -7,12 +7,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "PassDetail.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/Passes.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -772,13 +774,158 @@ struct DistributeAroundBarrier : public OpRewritePattern<scf::ParallelOp> {
   }
 };
 
+LogicalResult setToAllocaInsertionPoint(OpBuilder &builder) {
+  Operation *usePoint = &*builder.getInsertionPoint();
+  for (Operation *parent = usePoint->getParentOp(); parent != nullptr;
+       parent = parent->getParentOp()) {
+    if (isa<scf::ParallelOp, FuncOp>(parent)) {
+      builder.setInsertionPointToStart(&parent->getRegion(0).front());
+      return success();
+    }
+  }
+  return failure();
+}
+
+static void allocaValues(Location loc, ValueRange values,
+                         PatternRewriter &rewriter,
+                         SmallVector<Value> &allocated) {
+  OpBuilder::InsertionGuard guard(rewriter);
+  LogicalResult res = setToAllocaInsertionPoint(rewriter);
+  assert(succeeded(res));
+  (void)res;
+
+  allocated.reserve(values.size());
+  for (Value value : values) {
+    Value alloc = rewriter.create<memref::AllocaOp>(
+        loc, MemRefType::get(1, value.getType()), ValueRange());
+    allocated.push_back(alloc);
+  }
+}
+
+static void loadValues(Location loc, ArrayRef<Value> pointers, Value zero,
+                       PatternRewriter &rewriter,
+                       SmallVectorImpl<Value> &loaded) {
+  loaded.reserve(loaded.size() + pointers.size());
+  for (Value alloc : pointers)
+    loaded.push_back(rewriter.create<memref::LoadOp>(loc, alloc, zero));
+}
+
+static void storeValues(Location loc, ValueRange values, ValueRange pointers,
+                        Value zero, PatternRewriter &rewriter) {
+  for (auto pair : llvm::zip(values, pointers)) {
+    rewriter.create<memref::StoreOp>(loc, std::get<0>(pair), std::get<1>(pair),
+                                     zero);
+  }
+}
+
+struct Reg2MemFor : public OpRewritePattern<scf::ForOp> {
+  using OpRewritePattern<scf::ForOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(scf::ForOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!op.hasIterOperands() || !hasNestedBarrier(op))
+      return failure();
+
+    SmallVector<Value> allocated;
+    allocaValues(op.getLoc(), op.getIterOperands(), rewriter, allocated);
+    Value zero = rewriter.create<ConstantIndexOp>(op.getLoc(), 0);
+    storeValues(op.getLoc(), op.getIterOperands(), allocated, zero, rewriter);
+
+    auto newOp = rewriter.create<scf::ForOp>(op.getLoc(), op.lowerBound(),
+                                             op.upperBound(), op.step());
+    rewriter.setInsertionPointToStart(newOp.getBody());
+    SmallVector<Value> newRegionArguments;
+    newRegionArguments.push_back(newOp.getInductionVar());
+    loadValues(op.getLoc(), allocated, zero, rewriter, newRegionArguments);
+
+    auto oldTerminator = cast<scf::YieldOp>(op.getBody()->getTerminator());
+    rewriter.mergeBlockBefore(op.getBody(), newOp.getBody()->getTerminator(),
+                              newRegionArguments);
+
+    rewriter.setInsertionPoint(newOp.getBody()->getTerminator());
+    for (auto en : llvm::enumerate(oldTerminator.results())) {
+      rewriter.create<memref::StoreOp>(op.getLoc(), en.value(),
+                                       allocated[en.index()], zero);
+    }
+    rewriter.eraseOp(oldTerminator);
+
+    rewriter.setInsertionPointAfter(op);
+    SmallVector<Value> loaded;
+    loadValues(op.getLoc(), allocated, zero, rewriter, loaded);
+    rewriter.replaceOp(op, loaded);
+    return success();
+  }
+};
+
+struct Reg2MemWhile : public OpRewritePattern<scf::WhileOp> {
+  using OpRewritePattern<scf::WhileOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(scf::WhileOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getNumOperands() == 0 && op.getNumResults() == 0)
+      return failure();
+    if (!hasNestedBarrier(op))
+      return failure();
+
+    Value stackPtr = rewriter.create<LLVM::StackSaveOp>(
+        op.getLoc(), LLVM::LLVMPointerType::get(rewriter.getIntegerType(8)));
+    Value zero = rewriter.create<ConstantIndexOp>(op.getLoc(), 0);
+    SmallVector<Value> beforeAllocated, afterAllocated;
+    allocaValues(op.getLoc(), op.getOperands(), rewriter, beforeAllocated);
+    storeValues(op.getLoc(), op.getOperands(), beforeAllocated, zero, rewriter);
+    allocaValues(op.getLoc(), op.getResults(), rewriter, afterAllocated);
+
+    auto newOp =
+        rewriter.create<scf::WhileOp>(op.getLoc(), TypeRange(), ValueRange());
+    Block *newBefore =
+        rewriter.createBlock(&newOp.before(), newOp.before().begin());
+    SmallVector<Value> newBeforeArguments;
+    loadValues(op.getLoc(), beforeAllocated, zero, rewriter,
+               newBeforeArguments);
+    rewriter.mergeBlocks(&op.before().front(), newBefore, newBeforeArguments);
+
+    auto beforeTerminator =
+        cast<scf::ConditionOp>(newOp.before().front().getTerminator());
+    rewriter.setInsertionPoint(beforeTerminator);
+    storeValues(op.getLoc(), beforeTerminator.args(), afterAllocated, zero,
+                rewriter);
+
+    rewriter.updateRootInPlace(beforeTerminator,
+                               [&] { beforeTerminator.argsMutable().clear(); });
+
+    Block *newAfter =
+        rewriter.createBlock(&newOp.after(), newOp.after().begin());
+    SmallVector<Value> newAfterArguments;
+    loadValues(op.getLoc(), afterAllocated, zero, rewriter, newAfterArguments);
+    rewriter.mergeBlocks(&op.after().front(), newAfter, newAfterArguments);
+
+    auto afterTerminator =
+        cast<scf::YieldOp>(newOp.after().front().getTerminator());
+    rewriter.setInsertionPoint(afterTerminator);
+    storeValues(op.getLoc(), afterTerminator.results(), beforeAllocated, zero,
+                rewriter);
+
+    rewriter.updateRootInPlace(
+        afterTerminator, [&] { afterTerminator.resultsMutable().clear(); });
+
+    rewriter.setInsertionPointAfter(op);
+    SmallVector<Value> results;
+    loadValues(op.getLoc(), afterAllocated, zero, rewriter, results);
+    rewriter.create<LLVM::StackRestoreOp>(op.getLoc(), stackPtr);
+    rewriter.replaceOp(op, results);
+    return success();
+  }
+};
+
 struct CPUifyPass : public SCFCPUifyBase<CPUifyPass> {
   void runOnFunction() override {
     OwningRewritePatternList patterns(&getContext());
-    patterns.insert<ReplaceIfWithFors, WrapForWithBarrier, WrapWhileWithBarrier,
-                    InterchangeForPFor, InterchangeForPForLoad,
-                    InterchangeWhilePFor, NormalizeLoop, NormalizeParallel, RotateWhile, DistributeAroundBarrier>(
-        &getContext());
+    patterns
+        .insert<Reg2MemFor, Reg2MemWhile, ReplaceIfWithFors, WrapForWithBarrier,
+                WrapWhileWithBarrier, InterchangeForPFor,
+                InterchangeForPForLoad, InterchangeWhilePFor, NormalizeLoop,
+                NormalizeParallel, RotateWhile, DistributeAroundBarrier>(
+            &getContext());
     GreedyRewriteConfig config;
     config.maxIterations = 42;
     if (failed(applyPatternsAndFoldGreedily(getFunction(), std::move(patterns),
