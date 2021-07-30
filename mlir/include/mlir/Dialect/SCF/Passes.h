@@ -26,6 +26,8 @@ std::unique_ptr<Pass> createForLoopSpecializationPass();
 
 std::unique_ptr<Pass> createCPUifyPass();
 
+std::unique_ptr<Pass> createBarrierRemovalContinuation();
+
 /// Creates a loop fusion pass which fuses parallel loops.
 std::unique_ptr<Pass> createParallelLoopFusionPass();
 

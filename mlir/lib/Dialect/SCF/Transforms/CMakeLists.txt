@@ -1,4 +1,6 @@
 add_mlir_dialect_library(MLIRSCFTransforms
+  BarrierRemovalContinuation.cpp
+  BarrierUtils.cpp
   Bufferize.cpp
   LoopPipelining.cpp
   LoopRangeFolding.cpp
@@ -18,6 +20,8 @@ add_mlir_dialect_library(MLIRSCFTransforms
   LINK_LIBS PUBLIC
   MLIRAffine
   MLIRIR
+  MLIRLLVMIR
+  MLIRSCFToStandard
   MLIRMemRef
   MLIRPass
   MLIRSCF

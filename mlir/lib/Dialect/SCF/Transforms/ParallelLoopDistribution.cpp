@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "BarrierUtils.h"
 #include "PassDetail.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -24,32 +25,6 @@
 #define DBGS() ::llvm::dbgs() << "[" DEBUG_TYPE "] "
 
 using namespace mlir;
-
-/// Populates `crossing` with values (op results) that are defined in the same
-/// block as `op` and above it, and used by at least one op in the same block
-/// below `op`. Uses may be in nested regions.
-static void findValuesUsedBelow(Operation *op,
-                                llvm::SetVector<Value> &crossing) {
-  for (Operation *it = op->getPrevNode(); it != nullptr;
-       it = it->getPrevNode()) {
-    for (Value value : it->getResults()) {
-      for (Operation *user : value.getUsers()) {
-        // If the user is nested in another op, find its ancestor op that lives
-        // in the same block as the barrier.
-        while (user->getBlock() != op->getBlock())
-          user = user->getBlock()->getParentOp();
-
-        if (op->isBeforeInBlock(user)) {
-          crossing.insert(value);
-          break;
-        }
-      }
-    }
-  }
-
-  // No need to process block arguments, they are assumed to be induction
-  // variables and will be replicated.
-}
 
 /// Returns `true` if the given operation has a BarrierOp transitively nested in
 /// one of its regions.
@@ -165,22 +140,6 @@ struct NormalizeLoop : public OpRewritePattern<scf::ForOp> {
     return success();
   }
 };
-
-/// Emits the IR  computing the total number of iterations in the loop. We don't
-/// need to linearize them since we can allocate an nD array instead.
-static llvm::SmallVector<Value> emitIterationCounts(PatternRewriter &rewriter,
-                                                    scf::ParallelOp op) {
-  SmallVector<Value> iterationCounts;
-  for (auto bounds : llvm::zip(op.lowerBound(), op.upperBound(), op.step())) {
-    Value lowerBound = std::get<0>(bounds);
-    Value upperBound = std::get<1>(bounds);
-    Value step = std::get<2>(bounds);
-    Value diff = rewriter.create<SubIOp>(op.getLoc(), upperBound, lowerBound);
-    Value count = rewriter.create<SignedCeilDivIOp>(op.getLoc(), diff, step);
-    iterationCounts.push_back(count);
-  }
-  return iterationCounts;
-}
 
 /// Returns `true` if the loop has a form expected by interchange patterns.
 static bool isNormalized(scf::ParallelOp op) {
@@ -462,80 +421,6 @@ struct InterchangeForPForLoad : public OpRewritePattern<scf::ParallelOp> {
   }
 };
 
-/// Returns the insertion point (as block pointer and itertor in it) immediately
-/// after the definition of `v`.
-static std::pair<Block *, Block::iterator> getInsertionPointAfterDef(Value v) {
-  if (Operation *op = v.getDefiningOp())
-    return {op->getBlock(), std::next(Block::iterator(op))};
-
-  BlockArgument blockArg = v.cast<BlockArgument>();
-  return {blockArg.getParentBlock(), blockArg.getParentBlock()->begin()};
-}
-
-/// Returns the insertion point that post-dominates `first` and `second`.
-static std::pair<Block *, Block::iterator>
-findNearestPostDominatingInsertionPoint(
-    const std::pair<Block *, Block::iterator> &first,
-    const std::pair<Block *, Block::iterator> &second,
-    const PostDominanceInfo &postDominanceInfo) {
-  // Same block, take the last op.
-  if (first.first == second.first)
-    return first.second->isBeforeInBlock(&*second.second) ? second : first;
-
-  // Same region, use "normal" dominance analysis.
-  if (first.first->getParent() == second.first->getParent()) {
-    Block *block =
-        postDominanceInfo.findNearestCommonDominator(first.first, second.first);
-    assert(block);
-    if (block == first.first)
-      return first;
-    if (block == second.first)
-      return second;
-    return {block, block->begin()};
-  }
-
-  if (first.first->getParent()->isAncestor(second.first->getParent()))
-    return second;
-
-  assert(second.first->getParent()->isAncestor(first.first->getParent()) &&
-         "expected values to be defined in nested regions");
-  return first;
-}
-
-/// Returns the insertion point that post-dominates all `values`.
-static std::pair<Block *, Block::iterator>
-findNesrestPostDominatingInsertionPoint(
-    ArrayRef<Value> values, const PostDominanceInfo &postDominanceInfo) {
-  assert(!values.empty());
-  std::pair<Block *, Block::iterator> insertPoint =
-      getInsertionPointAfterDef(values[0]);
-  for (unsigned i = 1, e = values.size(); i < e; ++i)
-    insertPoint = findNearestPostDominatingInsertionPoint(
-        insertPoint, getInsertionPointAfterDef(values[i]), postDominanceInfo);
-  return insertPoint;
-}
-
-static std::pair<Block *, Block::iterator>
-findInsertionPointAfterLoopOperands(scf::ParallelOp op) {
-  // Find the earliest insertion point where loop bounds are fully defined.
-  PostDominanceInfo postDominanceInfo(op->getParentOfType<FuncOp>());
-  SmallVector<Value> operands;
-  llvm::append_range(operands, op.lowerBound());
-  llvm::append_range(operands, op.upperBound());
-  llvm::append_range(operands, op.step());
-  return findNesrestPostDominatingInsertionPoint(operands, postDominanceInfo);
-}
-
-static Value allocateTemporaryBuffer(PatternRewriter &rewriter, Value value,
-                                     ValueRange iterationCounts) {
-  SmallVector<int64_t> bufferSize(iterationCounts.size(),
-                                  ShapedType::kDynamicSize);
-  auto type = MemRefType::get(bufferSize, value.getType());
-  Value alloc =
-      rewriter.create<memref::AllocaOp>(value.getLoc(), type, iterationCounts);
-  return alloc;
-}
-
 /// Interchanges a parallel for loop with a while loop it contains. The while
 /// loop is expected to have an empty "after" region.
 struct InterchangeWhilePFor : public OpRewritePattern<scf::ParallelOp> {
@@ -698,7 +583,7 @@ struct DistributeAroundBarrier : public OpRewritePattern<scf::ParallelOp> {
     }
 
     llvm::SetVector<Value> crossing;
-    findValuesUsedBelow(&*it, crossing);
+    findValuesUsedBelow(cast<scf::BarrierOp>(&*it), crossing);
     std::pair<Block *, Block::iterator> insertPoint =
         findInsertionPointAfterLoopOperands(op);
 

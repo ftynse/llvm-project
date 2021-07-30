@@ -30,6 +30,12 @@ def SCFCPUify : FunctionPass<"cpuify"> {
                            "LLVM::LLVMDialect"];
 }
 
+def SCFBarrierRemovalContinuation : Pass<"barrier-removal-continuation"> {
+  let summary = "Remove scf.barrier using continuations";
+  let constructor = "mlir::createBarrierRemovalContinuation()";
+  let dependentDialects = ["memref::MemRefDialect", "StandardOpsDialect"];
+}
+
 def SCFParallelLoopFusion : Pass<"parallel-loop-fusion"> {
   let summary = "Fuse adjacent parallel loops";
   let constructor = "mlir::createParallelLoopFusionPass()";
