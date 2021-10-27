@@ -4484,11 +4484,13 @@ cc_library(
     name = "StandardToLLVM",
     srcs = [
         "lib/Conversion/PassDetail.h",
+        "lib/Conversion/StandardToLLVM/LLVMToLLVM.cpp",
         "lib/Conversion/StandardToLLVM/StandardToLLVM.cpp",
     ],
     hdrs = [
         "include/mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h",
         "include/mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h",
+        "include/mlir/Conversion/StandardToLLVM/LLVMToLLVM.h",
     ],
     includes = ["include"],
     deps = [

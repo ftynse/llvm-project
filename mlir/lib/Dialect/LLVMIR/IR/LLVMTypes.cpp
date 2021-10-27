@@ -120,9 +120,11 @@ LLVMFunctionType::verify(function_ref<InFlightDiagnostic()> emitError,
 //===----------------------------------------------------------------------===//
 
 bool LLVMPointerType::isValidElementType(Type type) {
-  return isCompatibleType(type) ? !type.isa<LLVMVoidType, LLVMTokenType,
-                                            LLVMMetadataType, LLVMLabelType>()
-                                : type.isa<PointerElementTypeInterface>();
+  return true;
+  // return isCompatibleType(type) ? !type.isa<LLVMVoidType, LLVMTokenType,
+  //                                           LLVMMetadataType,
+  //                                           LLVMLabelType>()
+  //                               : type.isa<PointerElementTypeInterface>();
 }
 
 LLVMPointerType LLVMPointerType::get(Type pointee, unsigned addressSpace) {
@@ -299,8 +301,10 @@ LogicalResult LLVMPointerType::verifyEntries(DataLayoutEntryListRef entries,
 //===----------------------------------------------------------------------===//
 
 bool LLVMStructType::isValidElementType(Type type) {
-  return !type.isa<LLVMVoidType, LLVMLabelType, LLVMMetadataType,
-                   LLVMFunctionType, LLVMTokenType, LLVMScalableVectorType>();
+  return true;
+  // return !type.isa<LLVMVoidType, LLVMLabelType, LLVMMetadataType,
+  //                  LLVMFunctionType, LLVMTokenType,
+  //                  LLVMScalableVectorType>();
 }
 
 LLVMStructType LLVMStructType::getIdentified(MLIRContext *context,

@@ -525,6 +525,10 @@ def ConvertSPIRVToLLVM : Pass<"convert-spirv-to-llvm", "ModuleOp"> {
 // StandardToLLVM
 //===----------------------------------------------------------------------===//
 
+def ConvertLLVMToLLVM : Pass<"convert-llvm-to-llvm", "ModuleOp"> {
+  let constructor = "mlir::createLLVMToLLVMPass()";
+}
+
 def ConvertStandardToLLVM : Pass<"convert-std-to-llvm", "ModuleOp"> {
   let summary = "Convert scalar and vector operations from the Standard to the "
                 "LLVM dialect";

@@ -2182,6 +2182,14 @@ static LogicalResult verify(FenceOp &op) {
 // LLVMDialect initialization, type parsing, and registration.
 //===----------------------------------------------------------------------===//
 
+template <typename T>
+struct PtrElementModel
+    : public mlir::LLVM::PointerElementTypeInterface::ExternalModel<
+          PtrElementModel<T>, T> {};
+
+class MemRefInsider
+    : public mlir::MemRefElementTypeInterface::FallbackModel<MemRefInsider> {};
+
 void LLVMDialect::initialize() {
   addAttributes<FMFAttr, LinkageAttr, LoopOptionsAttr>();
 
@@ -2206,6 +2214,10 @@ void LLVMDialect::initialize() {
 
   // Support unknown operations because not all LLVM operations are registered.
   allowUnknownOperations();
+
+  MemRefType::attachInterface<PtrElementModel<MemRefType>>(*getContext());
+  LLVM::LLVMPointerType::attachInterface<MemRefInsider>(*getContext());
+  LLVM::LLVMStructType::attachInterface<MemRefInsider>(*getContext());
 }
 
 #define GET_OP_CLASSES
