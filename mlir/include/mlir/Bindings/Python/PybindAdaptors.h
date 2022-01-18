@@ -309,8 +309,25 @@ protected:
         py::detail::get_type_info((PyTypeObject *)superClass.ptr());
     auto *instance = reinterpret_cast<py::detail::instance *>(super.ptr());
 
+    py::detail::type_caster<MlirAttribute> c;
+    c.load(super, true);
+    auto attr = (MlirAttribute)c;
+    mlirAttributeDump(attr);
+
+    fprintf(stderr, "%p\n", attr.ptr);
+    fprintf(stderr, "%p\n",
+            instance->get_value_and_holder(ti, true).value_ptr());
+    auto iptr = reinterpret_cast<intptr_t>(
+        instance->get_value_and_holder(ti, true).value_ptr());
+    iptr += sizeof(void *) + sizeof(py::object);
+    auto *a = reinterpret_cast<MlirAttribute **>(iptr);
+    fprintf(stderr, "%p\n", *a);
+
     // Take ownership of the value pointer from the base class.
-    vh.value_ptr() = instance->get_value_and_holder(ti, true).value_ptr();
+    // vh.value_ptr() = instance->get_value_and_holder(ti, true).value_ptr()
+    std::swap(vh.value_ptr(),
+              instance->get_value_and_holder(ti, true).value_ptr());
+    super.ptr() = reinterpret_cast<PyObject *>(instance);
     super.release();
   }
 
@@ -350,6 +367,7 @@ public:
     // allocation for pybind11.
     std::string captureTypeName(
         typeClassName); // As string in case if typeClassName is not static.
+#if 0
     py::cpp_function initCf(
         [superClass, isaFunction, captureTypeName](
             py::detail::value_and_holder &vh, py::object otherType) {
@@ -369,6 +387,24 @@ public:
         py::detail::is_new_style_constructor(),
         "Casts the passed type to this specific sub-type.");
     thisClass.attr("__init__") = initCf;
+#endif
+    py::cpp_function newCf(
+        [superClass, isaFunction, captureTypeName](py::object cls,
+                                                   py::object otherType) {
+          MlirAttribute rawAttribute = py::cast<MlirAttribute>(otherType);
+          if (!isaFunction(rawAttribute)) {
+            auto origRepr = py::repr(otherType).cast<std::string>();
+            throw std::invalid_argument(
+                (llvm::Twine("Cannot cast attribute to ") + captureTypeName +
+                 " (from " + origRepr + ")")
+                    .str());
+          }
+          py::object self = superClass.attr("__new__")(cls);
+          return self;
+        },
+        py::name("__new__"), py::arg("cast_from_type"),
+        py::is_method(scope.attr(typeClassName)));
+    thisClass.attr("__new__") = newCf;
 
     // 'isinstance' method.
     def_staticmethod(
@@ -408,6 +444,7 @@ public:
     // allocation for pybind11.
     std::string captureTypeName(
         typeClassName); // As string in case if typeClassName is not static.
+#if 0
     py::cpp_function initCf(
         [superClass, isaFunction, captureTypeName](
             py::detail::value_and_holder &vh, py::object otherType) {
@@ -427,6 +464,24 @@ public:
         py::detail::is_new_style_constructor(),
         "Casts the passed type to this specific sub-type.");
     thisClass.attr("__init__") = initCf;
+#endif
+    py::cpp_function newCf(
+        [superClass, isaFunction, captureTypeName](py::object cls,
+                                                   py::object otherType) {
+          MlirType rawType = py::cast<MlirType>(otherType);
+          if (!isaFunction(rawType)) {
+            auto origRepr = py::repr(otherType).cast<std::string>();
+            throw std::invalid_argument((llvm::Twine("Cannot cast type to ") +
+                                         captureTypeName + " (from " +
+                                         origRepr + ")")
+                                            .str());
+          }
+          py::object self = superClass.attr("__new__")(cls);
+          return self;
+        },
+        py::name("__new__"), py::arg("cast_from_type"),
+        py::is_method(scope.attr(typeClassName)));
+    thisClass.attr("__new__") = newCf;
 
     // 'isinstance' method.
     def_staticmethod(
