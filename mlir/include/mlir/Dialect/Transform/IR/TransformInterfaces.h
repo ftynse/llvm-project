@@ -74,6 +74,10 @@ public:
   /// This is helpful for transformations that apply to a particular handle.
   ArrayRef<Operation *> getPayloadOps(Value value) const;
 
+  /// Returns the Transform IR handle for the given Payload IR op if it exists
+  /// in the state, null otherwise.
+  Value getHandleForPayloadOp(Operation *op) const;
+
   /// Applies the transformation specified by the given transform op and updates
   /// the state accordingly.
   LogicalResult applyTransform(TransformOpInterface transform);
@@ -184,6 +188,10 @@ public:
 
     /// Provides read-only access to the parent TransformState object.
     const TransformState &getTransformState() const { return state; }
+
+    /// Replaces the given payload op with another op. If the replacement op is
+    /// null, removes the association of the payload op with its handle.
+    LogicalResult replacePayloadOp(Operation *op, Operation *replacement);
 
   private:
     /// Back-reference to the state that is being extended.

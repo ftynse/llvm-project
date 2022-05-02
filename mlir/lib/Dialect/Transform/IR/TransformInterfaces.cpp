@@ -41,6 +41,14 @@ transform::TransformState::getPayloadOps(Value value) const {
   return iter->getSecond();
 }
 
+Value transform::TransformState::getHandleForPayloadOp(Operation *op) const {
+  for (const Mappings &mapping : llvm::make_second_range(mappings)) {
+    if (Value handle = mapping.reverse.lookup(op))
+      return handle;
+  }
+  return Value();
+}
+
 LogicalResult
 transform::TransformState::setPayloadOps(Value value,
                                          ArrayRef<Operation *> targets) {
@@ -132,7 +140,21 @@ transform::TransformState::applyTransform(TransformOpInterface transform) {
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// TransformState::Extension
+//===----------------------------------------------------------------------===//
+
 transform::TransformState::Extension::~Extension() = default;
+
+LogicalResult
+transform::TransformState::Extension::replacePayloadOp(Operation *op,
+                                                       Operation *replacement) {
+  state.updatePayloadOps(state.getHandleForPayloadOp(op),
+                         [&](Operation *current) {
+                           return current == op ? replacement : current;
+                         });
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // TransformResults
