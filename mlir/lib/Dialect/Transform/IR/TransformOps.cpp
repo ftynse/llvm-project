@@ -691,10 +691,11 @@ checkDoubleConsume(Value value,
 }
 
 LogicalResult transform::SequenceOp::verify() {
-  assert(getBodyBlock()->getNumArguments() == 1 &&
-         "the number of arguments must have been verified to be 1 by "
+  assert(getBodyBlock()->getNumArguments() >= 1 &&
+         "the number of arguments must have been verified to be more than 1 by "
          "PossibleTopLevelTransformOpTrait");
 
+  // TODO: this should be verified by the trait.
   BlockArgument arg = getBodyBlock()->getArgument(0);
   if (getRoot()) {
     if (arg.getType() != getRoot().getType()) {

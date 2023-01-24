@@ -1,7 +1,14 @@
 // RUN: mlir-opt %s -split-input-file -verify-diagnostics
 
-// expected-error @below {{expects the entry block to have one argument of type implementing TransformHandleTypeInterface}}
+// expected-error @below {{expects the entry block to have at least one argument}}
 transform.sequence failures(propagate) {
+}
+
+// -----
+
+// expected-error @below {{expects the first entry block argument to be of type implementing TransformHandleTypeInterface}}
+transform.sequence failures(propagate) {
+^bb0(%rag0: i64):
 }
 
 // -----
@@ -9,7 +16,7 @@ transform.sequence failures(propagate) {
 // expected-note @below {{nested in another possible top-level op}}
 transform.sequence failures(propagate) {
 ^bb0(%arg0: !pdl.operation):
-  // expected-error @below {{expects the root operation to be provided for a nested op}}
+  // expected-error @below {{expects operands to be provided for a nested op}}
   transform.sequence failures(propagate) {
   ^bb1(%arg1: !pdl.operation):
   }
@@ -49,7 +56,7 @@ transform.sequence failures(propagate) {
 // expected-note @below {{nested in another possible top-level op}}
 transform.with_pdl_patterns {
 ^bb0(%arg0: !pdl.operation):
-  // expected-error @below {{expects the root operation to be provided for a nested op}}
+  // expected-error @below {{expects operands to be provided for a nested op}}
   transform.sequence failures(propagate) {
   ^bb1(%arg1: !pdl.operation):
   }
@@ -190,7 +197,7 @@ transform.sequence failures(propagate) {
 
 // -----
 
-// expected-error @below {{expects the entry block to have one argument of type implementing TransformHandleTypeInterface}}
+// expected-error @below {{expects the entry block to have at least one argument}}
 transform.alternatives {
 ^bb0:
   transform.yield
