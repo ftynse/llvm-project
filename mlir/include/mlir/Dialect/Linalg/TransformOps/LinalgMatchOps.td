@@ -101,10 +101,15 @@ def MatchStructuredBodyOp : Op<Transform_Dialect, "match.structured.body", [
 
       * `reduction_position`: the body of the structured payload op implements
         a reduction of the `n`-th operand (`n` is the value of the attribute)
-        using a single combiner operation;
+        using a single combiner operation.
 
       * `passthrough`: the body of the structured payload op only forwards
         inputs to the outputs (copy or broadcast).
+
+      * `elementwise`: the body of the structured payload op contains exactly
+        one non-terminator op of the kind specified as value of this attribute
+        and whose operands are a body block arguments and whose results are used
+        by the terminator.
 
   }], StructuredPredicate.extraDescription, [{
 
@@ -116,7 +121,8 @@ def MatchStructuredBodyOp : Op<Transform_Dialect, "match.structured.body", [
   }]);
   let arguments = (ins TransformHandleTypeInterface:$operand_handle,
                        OptionalAttr<I64Attr>:$reduction_position,
-                       UnitAttr:$passthrough);
+                       UnitAttr:$passthrough,
+                       OptionalAttr<StrAttr>:$elementwise);
   let assemblyFormat = "$operand_handle attr-dict `:` type($operand_handle)";
   let extraClassDeclaration = SingleOpMatcher.extraDeclaration;
   let hasVerifier = 1;

@@ -12,6 +12,8 @@
 #include "mlir/Dialect/Transform/IR/MatchInterfaces.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/FunctionImplementation.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetOperations.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -163,6 +165,15 @@ LogicalResult transform::detail::verifyStructuredOpPredicateOpTrait(
 // MatchStructuredBodyOp
 //===----------------------------------------------------------------------===//
 
+/// Returns `true` if all values in `subsetValues` are also contained in
+/// `supersetValues`.
+static bool isValueSubset(ValueRange subsetValues, ValueRange supersetValues) {
+  llvm::SmallDenseSet<Value, 4> subset, superset;
+  subset.insert(subsetValues.begin(), subsetValues.end());
+  superset.insert(supersetValues.begin(), supersetValues.end());
+  return llvm::set_is_subset(subset, superset);
+}
+
 DiagnosedSilenceableFailure transform::MatchStructuredBodyOp::matchOperation(
     Operation *current, transform::TransformResults &results,
     transform::TransformState &state) {
@@ -178,6 +189,7 @@ DiagnosedSilenceableFailure transform::MatchStructuredBodyOp::matchOperation(
     }
     return DiagnosedSilenceableFailure::success();
   }
+
   if (getPassthrough()) {
     Block &body = linalgOp->getRegion(0).front();
     if (body.getTerminator()->getOperands() != linalgOp.getRegionInputArgs()) {
@@ -185,13 +197,52 @@ DiagnosedSilenceableFailure transform::MatchStructuredBodyOp::matchOperation(
     }
     return DiagnosedSilenceableFailure::success();
   }
+
+  if (std::optional<StringRef> elementwiseOpName = getElementwise()) {
+    Block &body = linalgOp->getRegion(0).front();
+    if (!llvm::hasNItems(body, 2)) {
+      return emitSilenceableError() << "elementwise expects one operation and "
+                                       "the terminator in the body";
+    }
+    StringRef actualOpName = body.front().getName().getStringRef();
+    if (actualOpName != *elementwiseOpName) {
+      DiagnosedSilenceableFailure diag =
+          emitSilenceableError() << "expected " << *elementwiseOpName
+                                 << " in the body, found " << actualOpName;
+      diag.attachNote(body.front().getLoc()) << "payload operation in the body";
+      return diag;
+    }
+    if (!isValueSubset(body.front().getOperands(), body.getArguments())) {
+      DiagnosedSilenceableFailure diag =
+          emitSilenceableError()
+          << "expected the operands of the payload "
+             "operation in the body to be body arguments";
+      diag.attachNote(body.front().getLoc()) << "payload operation in the body";
+      return diag;
+    }
+    if (!isValueSubset(body.front().getResults(), body.back().getOperands())) {
+      return emitSilenceableError()
+             << "expected operands fo the terminator to be results of the "
+                "first operation in the body";
+    }
+    return DiagnosedSilenceableFailure::success();
+  }
+
   return emitDefiniteFailure() << "unknown body condition";
 }
 
 LogicalResult transform::MatchStructuredBodyOp::verify() {
-  if (getReductionPosition() && getPassthrough()) {
-    return emitOpError() << "reduction position and passthrough conditions are "
-                            "mutually exclusive";
+  SmallVector<StringAttr> selectorAttrs{getReductionPositionAttrName(),
+                                        getPassthroughAttrName(),
+                                        getElementwiseAttrName()};
+  size_t numSelectors = llvm::count_if(selectorAttrs, [&](StringAttr name) {
+    return getOperation()->hasAttr(name);
+  });
+  if (numSelectors != 1) {
+    std::string message;
+    llvm::raw_string_ostream os(message);
+    llvm::interleaveComma(selectorAttrs, os);
+    return emitOpError() << "expected exactly one of " << os.str();
   }
   return success();
 }
