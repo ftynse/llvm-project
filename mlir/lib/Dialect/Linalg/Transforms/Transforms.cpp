@@ -1355,6 +1355,9 @@ FailureOr<Conv1DOp> DownscaleSizeOneWindowed2DConvolution<Conv2DOp, Conv1DOp>::
           .Case([&](linalg::Conv2DNchwFchwOp op) {
             return std::make_tuple(2, 3, 2, 3);
           })
+          .Case([&](linalg::Conv2DNhwcFhwcOp op) {
+            return std::make_tuple(1, 2, 1, 2);
+          })
           .Case([&](linalg::PoolingNhwcSumOp op) {
             return std::make_tuple(0, 1, 1, 2);
           })
@@ -1437,6 +1440,8 @@ template struct linalg::DownscaleSizeOneWindowed2DConvolution<Conv2DNhwcHwcfOp,
                                                               Conv1DNwcWcfOp>;
 template struct linalg::DownscaleSizeOneWindowed2DConvolution<Conv2DNchwFchwOp,
                                                               Conv1DNcwFcwOp>;
+template struct linalg::DownscaleSizeOneWindowed2DConvolution<Conv2DNhwcFhwcOp,
+                                                              Conv1DNwcFwcOp>;
 template struct linalg::DownscaleSizeOneWindowed2DConvolution<PoolingNhwcSumOp,
                                                               PoolingNwcSumOp>;
 template struct linalg::DownscaleSizeOneWindowed2DConvolution<PoolingNchwSumOp,

@@ -469,7 +469,8 @@ static AffineMap reindexIndexingMap(AffineMap map) {
 enum class Conv1DOpOrder {
   W,   // Corresponds to non-channeled 1D convolution operation.
   Ncw, // Corresponds to operation that traverses the input in (n, c, w) order.
-  Nwc  // Corresponds to operation that traverses the input in (n, w, c) order.
+  Nwc, // Corresponds to operation that traverses the input in (n, w, c) order.
+  NwcFwc, // Input (n, w, c), output (f, w, c).
 };
 
 /// Helper data structure to represent the result of vectorization.
@@ -2582,6 +2583,37 @@ struct Conv1DGenerator
       }
       resShape = {nSize, wSize, fSize};
       break;
+    case Conv1DOpOrder::NwcFwc:
+      // out{n, w, f}
+      bindShapeDims(resShapedType, nSize, wSize, fSize);
+      switch (oper) {
+      case Conv:
+        // kernel{f, kw, c}
+        bindShapeDims(rhsShapedType, fSize, kwSize, cSize);
+        break;
+      case Pool:
+        // kernel{kw}
+        bindShapeDims(rhsShapedType, kwSize);
+        cSize = fSize;
+        break;
+      }
+      lhsShape = {nSize,
+                  // iw = ow * sw + kw *  dw - 1
+                  //   (i.e. 16 convolved with 3 (@stride 1 dilation 1) -> 14)
+                  // Perform the proper inclusive -> exclusive -> inclusive.
+                  ((wSize - 1) * strideW + 1) + ((kwSize - 1) * dilationW + 1) -
+                      1,
+                  cSize};
+      switch (oper) {
+      case Conv:
+        rhsShape = {fSize, kwSize, cSize};
+        break;
+      case Pool:
+        rhsShape = {kwSize};
+        break;
+      }
+      resShape = {nSize, wSize, fSize};
+      break;
     case Conv1DOpOrder::Ncw:
       // out{n, f, w}
       bindShapeDims(resShapedType, nSize, fSize, wSize);
@@ -2652,6 +2684,16 @@ struct Conv1DGenerator
     case Conv1DOpOrder::Nwc:
       // Base case, so no transposes necessary.
       break;
+    case Conv1DOpOrder::NwcFwc: {
+      // Pre-transpose the RHS to match the base case.
+      // fwc -> wcf
+      static constexpr std::array<int64_t, 3> permRhs = {1, 2, 0};
+      
+      // This is needed only for Conv.
+      if (oper == Conv)
+        rhs = rewriter.create<vector::TransposeOp>(loc, rhs, permRhs);
+      break;
+    }
     case Conv1DOpOrder::Ncw: {
       // To match base vectorization case, we pre-transpose current case.
       // ncw -> nwc
@@ -2726,6 +2768,9 @@ struct Conv1DGenerator
     case Conv1DOpOrder::W:
     case Conv1DOpOrder::Nwc:
       // Base case, so no transposes necessary.
+      break;
+    case Conv1DOpOrder::NwcFwc:
+      // RHS is same as the base case, no transpose necessary.
       break;
     case Conv1DOpOrder::Ncw: {
       // nwf -> nfw
@@ -2984,6 +3029,21 @@ struct Conv1DGenerator
     return rewriter.notifyMatchFailure(op, "not a conv::Nwc layout");
   }
 
+  FailureOr<Operation *> generateNwcFwcConv() {
+    AffineExpr n, w, f, kw, c;
+     bindDims(ctx, n, w, f, kw, c);
+    if (!iters({Par(), Par(), Par(), Red(), Red()}))
+      return rewriter.notifyMatchFailure(
+          op, "failed to match conv::NwcFwc 3-par 2-red");
+
+    if (layout({/*lhsIndex*/ {n, strideW * w + dilationW * kw, c},
+                /*rhsIndex*/ {f, kw, c},
+                /*resIndex*/ {n, w, f}}))
+      return conv(Conv1DOpOrder::NwcFwc);
+
+    return rewriter.notifyMatchFailure(op, "not a conv::NwcFwc layout");
+  }
+
   /// Entry point that transposes into the common form:
   ///   {{n, c, strideW * w + dilationW * kw}, {f, c, kw}, {n, f, w}}
   FailureOr<Operation *> generateNcwConv() {
@@ -3129,6 +3189,9 @@ static FailureOr<Operation *> vectorizeConvolution(RewriterBase &rewriter,
   if (succeeded(res))
     return res;
   res = e.generateNwcConv();
+  if (succeeded(res))
+    return res;
+  res = e.generateNwcFwcConv();
   if (succeeded(res))
     return res;
   res = e.generateNcwConv();

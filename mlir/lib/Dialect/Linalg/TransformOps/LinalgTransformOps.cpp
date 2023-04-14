@@ -326,6 +326,9 @@ transform::DecomposeOp::applyToOne(transform::TransformRewriter &rewriter,
 
   DOWNSCALE_NORMAL(Conv2DNhwcHwcfOp, Conv1DNwcWcfOp)
   DOWNSCALE_NORMAL(Conv2DNchwFchwOp, Conv1DNcwFcwOp)
+
+  DOWNSCALE_NORMAL(Conv2DNhwcFhwcOp, Conv1DNwcFwcOp)
+
   DOWNSCALE_NORMAL(PoolingNhwcSumOp, PoolingNwcSumOp)
   DOWNSCALE_NORMAL(PoolingNchwSumOp, PoolingNcwSumOp)
   DOWNSCALE_NORMAL(PoolingNhwcMaxOp, PoolingNwcMaxOp)

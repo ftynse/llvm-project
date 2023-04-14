@@ -1204,6 +1204,8 @@ extern template struct DownscaleSizeOneWindowed2DConvolution<Conv2DNhwcHwcfOp,
                                                              Conv1DNwcWcfOp>;
 extern template struct DownscaleSizeOneWindowed2DConvolution<Conv2DNchwFchwOp,
                                                              Conv1DNcwFcwOp>;
+extern template struct DownscaleSizeOneWindowed2DConvolution<Conv2DNhwcFhwcOp,
+                                                             Conv1DNwcFwcOp>;
 
 /// Rewrites 2-D depthwise convolution ops with size-1 (w, kw) or (h, kh)
 /// dimensions into 1-D depthwise convolution ops.
