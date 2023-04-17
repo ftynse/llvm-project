@@ -9,6 +9,7 @@
 #include "mlir/Dialect/SCF/TransformOps/SCFTransformOps.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/LoopUtils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
@@ -17,8 +18,11 @@
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
 #include "mlir/Dialect/Transform/IR/TransformInterfaces.h"
 #include "mlir/Dialect/Transform/IR/TransformOps.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/OpDefinition.h"
 
 using namespace mlir;
 using namespace mlir::affine;
@@ -61,6 +65,51 @@ transform::GetParentForOp::apply(transform::TransformRewriter &rewriter,
     parents.insert(loop);
   }
   results.set(cast<OpResult>(getResult()), parents.getArrayRef());
+  return DiagnosedSilenceableFailure::success();
+}
+
+DiagnosedSilenceableFailure
+transform::ForallToFor::applyToOne(transform::TransformRewriter &rewriter,
+                                   scf::ForallOp target,
+                                   transform::ApplyToEachResultList &results,
+                                   transform::TransformState &state) {
+  // rewriter.setInsertionPoint(target);
+
+  if (!target.getOutputs().empty()) {
+    return emitDefiniteFailure()
+           << "unsupported shared outputs (didn't bufferize?)";
+  }
+
+  auto materialize = [](OpBuilder &b, Location loc, OpFoldResult r) -> Value {
+    if (Value v = r.dyn_cast<Value>())
+      return v;
+    return b.create<arith::ConstantIndexOp>(
+        loc, r.get<Attribute>().cast<IntegerAttr>().getValue().getSExtValue());
+  };
+
+  SmallVector<OpFoldResult> lbs = target.getMixedLowerBound();
+  SmallVector<OpFoldResult> ubs = target.getMixedUpperBound();
+  SmallVector<OpFoldResult> steps = target.getMixedStep();
+  auto loc = target.getLoc();
+  SmallVector<Value> ivs;
+  for (auto &&[lb, ub, step] : llvm::zip(lbs, ubs, steps)) {
+    Value lbValue = materialize(rewriter, loc, lb);
+    Value ubValue = materialize(rewriter, loc, ub);
+    Value stepValue = materialize(rewriter, loc, step);
+    auto loop = rewriter.create<scf::ForOp>(
+        loc, lbValue, ubValue, stepValue, ValueRange(),
+        [](OpBuilder &, Location, Value, ValueRange) {});
+    ivs.push_back(loop.getInductionVar());
+    rewriter.setInsertionPointToStart(loop.getBody());
+    rewriter.create<scf::YieldOp>(loc);
+    rewriter.setInsertionPointToStart(loop.getBody());
+  }
+  rewriter.eraseOp(target.getBody()->getTerminator());
+  rewriter.inlineBlockBefore(target.getBody(), &*rewriter.getInsertionPoint(),
+                             ivs);
+  rewriter.eraseOp(target);
+  results.push_back(ivs.front().getParentBlock()->getParentOp());
+
   return DiagnosedSilenceableFailure::success();
 }
 

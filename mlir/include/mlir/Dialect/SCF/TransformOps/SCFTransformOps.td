@@ -29,6 +29,24 @@ def ApplyForLoopCanonicalizationPatternsOp : Op<Transform_Dialect,
 
 def Transform_ScfForOp : Transform_ConcreteOpType<"scf.for">;
 
+
+
+def ForallToFor : Op<Transform_Dialect, "loop.forall_to_for",
+    [FunctionalStyleTransformOpTrait, MemoryEffectsOpInterface, TransformOpInterface, TransformEachOpTrait]> {
+  let arguments = (ins TransformHandleTypeInterface:$target);
+  let results = (outs TransformHandleTypeInterface:$transformed);
+
+  let assemblyFormat = "$target attr-dict `:` functional-type(operands, results)";
+
+  let extraClassDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+        ::mlir::transform::TransformRewriter &rewriter,
+        ::mlir::scf::ForallOp target,
+        ::mlir::transform::ApplyToEachResultList &results,
+        ::mlir::transform::TransformState &state);
+  }];
+}
+
 def GetParentForOp : Op<Transform_Dialect, "loop.get_parent_for",
     [NavigationTransformOpTrait, MemoryEffectsOpInterface,
      DeclareOpInterfaceMethods<TransformOpInterface>]> {
