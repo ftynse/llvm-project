@@ -117,6 +117,11 @@ def SCFForLoopRangeFolding : Pass<"scf-for-loop-range-folding"> {
   let constructor = "mlir::createForLoopRangeFoldingPass()";
 }
 
+def SCFHoistAllocs : Pass<"scf-hoist-allocs"> {
+  let summary = "Hoist allocations from SCF loops";
+  let constructor = "mlir::createHoistAllocsPass()";
+}
+
 def SCFForToWhileLoop : Pass<"scf-for-to-while"> {
   let summary = "Convert SCF for loops to SCF while loops";
   let constructor = "mlir::createForToWhileLoopPass()";

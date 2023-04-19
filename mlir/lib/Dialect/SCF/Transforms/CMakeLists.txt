@@ -2,6 +2,7 @@ add_mlir_dialect_library(MLIRSCFTransforms
   BufferizableOpInterfaceImpl.cpp
   Bufferize.cpp
   ForToWhile.cpp
+  HoistAllocs.cpp
   LoopCanonicalization.cpp
   LoopPipelining.cpp
   LoopRangeFolding.cpp
