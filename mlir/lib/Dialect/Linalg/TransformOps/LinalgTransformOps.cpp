@@ -2971,6 +2971,22 @@ void transform::TileToScfForOp::getEffects(
   modifiesPayload(effects);
 }
 
+DiagnosedSilenceableFailure transform::FoldUnitExtentDimsOp::applyToOne(
+    ::mlir::Operation *target,
+    ::mlir::transform::ApplyToEachResultList &results,
+    ::mlir::transform::TransformState &state) {
+  MLIRContext *context = target->getContext();
+  RewritePatternSet patterns(context);
+  populateFoldUnitExtentDimsViaReshapesPatterns(patterns);
+  TrackingListener listener(state, *this);
+  GreedyRewriteConfig config;
+  config.listener = &listener;
+  if (failed(applyPatternsAndFoldGreedily(target, std::move(patterns), config)))
+    return emitDefaultDefiniteFailure(target);
+  results.push_back(target);
+  return DiagnosedSilenceableFailure::success();
+}
+
 //===----------------------------------------------------------------------===//
 // VectorizeOp
 //===----------------------------------------------------------------------===//

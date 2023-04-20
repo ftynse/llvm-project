@@ -1719,6 +1719,20 @@ def TileToScfForOp : Op<Transform_Dialect, "structured.tile_to_scf_for",
   }];
 }
 
+def FoldUnitExtentDimsOp : Op<Transform_Dialect, "structured.fold_unit_extent_dims",
+  [FunctionalStyleTransformOpTrait, MemoryEffectsOpInterface,
+   TransformEachOpTrait, TransformOpInterface]> {
+  let arguments = (ins PDL_Operation:$target);
+  let results = (outs PDL_Operation:$result);
+  let assemblyFormat = "$target attr-dict";
+  let extraClassDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+        ::mlir::Operation *target,
+        ::mlir::transform::ApplyToEachResultList &results,
+        ::mlir::transform::TransformState &state);
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // VectorizeOp
 //===----------------------------------------------------------------------===//
