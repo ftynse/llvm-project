@@ -246,11 +246,13 @@ class MatchStructuredOperandOp<string opname> : Op<Transform_Dialect, opname, [
                        UnitAttr:$is_inverted,
                        UnitAttr:$is_all,
                        UnitAttr:$permutation,
-                       UnitAttr:$projected_permutation);
+                       UnitAttr:$projected_permutation,
+                       UnitAttr:$identity_dims,
+                       UnitAttr:$pairwise_add_dims);
 
   // TODO: allow this to bind multiple inputs simultaneously after checking that
   // `transform.foreach` works well in matches.
-  let results = (outs Optional<TransformAnyHandle>:$result);
+  let results = (outs Optional<Transform_AnyHandleOrParamType>:$result);
   let assemblyFormat =
       "$operand_handle `[`"
       "custom<StructuredTransformDims>($raw_position_list, $is_inverted, $is_all)"

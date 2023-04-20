@@ -1285,6 +1285,88 @@ transform::ParamConstantOp::apply(transform::TransformResults &results,
 }
 
 //===----------------------------------------------------------------------===//
+// ParamSetDifferenceOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform::ParamSetDifferenceOp::apply(transform::TransformResults &results,
+                                       transform::TransformState &state) {
+  SetVector<Attribute> lhs;
+  DenseSet<Attribute> rhs;
+  ArrayRef<Attribute> lhsParams = state.getParams(getLhs());
+  ArrayRef<Attribute> rhsParams = state.getParams(getRhs());
+  lhs.insert(lhsParams.begin(), lhsParams.end());
+  rhs.insert(rhsParams.begin(), rhsParams.end());
+
+  SmallVector<Attribute> result;
+  for (Attribute attr : lhs) {
+    if (!rhs.contains(attr))
+      result.push_back(attr);
+  }
+
+  results.setParams(cast<OpResult>(getResult()), result);
+  return DiagnosedSilenceableFailure::success();
+}
+
+//===----------------------------------------------------------------------===//
+// ParamPayloadSizeOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform::ParamPayloadSizeOp::apply(transform::TransformResults &results,
+                                     transform::TransformState &state) {
+  SmallVector<SmallVector<MappedValue>> mappings;
+  detail::prepareValueMappings(mappings, getHandle(), state);
+  Builder builder(getOperation()->getContext());
+  results.setParams(cast<OpResult>(getResult()),
+                    builder.getI64IntegerAttr(mappings[0].size()));
+  return DiagnosedSilenceableFailure::success();
+}
+
+//===----------------------------------------------------------------------===//
+// ParamSetIntersectOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform::ParamSetIntersectOp::apply(transform::TransformResults &results,
+                                      transform::TransformState &state) {
+  SetVector<Attribute> lhs;
+  DenseSet<Attribute> rhs;
+  ArrayRef<Attribute> lhsParams = state.getParams(getLhs());
+  ArrayRef<Attribute> rhsParams = state.getParams(getRhs());
+  lhs.insert(lhsParams.begin(), lhsParams.end());
+  rhs.insert(rhsParams.begin(), rhsParams.end());
+
+  SmallVector<Attribute> result;
+  for (Attribute attr : lhs) {
+    if (rhs.contains(attr))
+      result.push_back(attr);
+  }
+
+  results.setParams(cast<OpResult>(getResult()), result);
+  return DiagnosedSilenceableFailure::success();
+}
+
+//===----------------------------------------------------------------------===//
+// ParamSetUnionOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform::ParamSetUnionOp::apply(transform::TransformResults &results,
+                                  transform::TransformState &state) {
+  SetVector<Attribute> lhs;
+  ArrayRef<Attribute> lhsParams = state.getParams(getLhs());
+  lhs.insert(lhsParams.begin(), lhsParams.end());
+
+  for (Attribute attr : state.getParams(getRhs())) {
+    lhs.insert(attr);
+  }
+
+  results.setParams(cast<OpResult>(getResult()), lhs.getArrayRef());
+  return DiagnosedSilenceableFailure::success();
+}
+
+//===----------------------------------------------------------------------===//
 // MergeHandlesOp
 //===----------------------------------------------------------------------===//
 

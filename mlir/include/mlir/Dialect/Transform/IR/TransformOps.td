@@ -421,6 +421,7 @@ def MatchParamCmpIOp : Op<Transform_Dialect, "match.param.cmpi", [
 def MergeHandlesOp : TransformDialectOp<"merge_handles",
     [DeclareOpInterfaceMethods<TransformOpInterface, ["allowsRepeatedHandleOperands"]>,
      DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+     MatchOpInterface,
      SameOperandsAndResultType]> {
   let summary = "Merges handles into one pointing to the union of payload ops";
   let description = [{
@@ -557,6 +558,52 @@ def ParamConstantOp : Op<Transform_Dialect, "param.constant", [
   let arguments = (ins AnyAttr:$value);
   let results = (outs TransformParamTypeInterface:$param);
   let assemblyFormat = "$value attr-dict `->` type($param)";
+}
+
+def ParamPayloadSizeOp : Op<Transform_Dialect, "param.payload_size", [
+    MatchOpInterface,
+    DeclareOpInterfaceMethods<TransformOpInterface>,
+    MemoryEffectsOpInterface,
+    ParamProducerTransformOpTrait]> {
+  let arguments = (ins Transform_AnyHandleOrParamType:$handle);
+  let results = (outs TransformParamTypeInterface:$result);
+  let assemblyFormat = "$handle attr-dict `:` functional-type(operands, results)";
+}
+
+def ParamSetIntersectOp : Op<Transform_Dialect, "param.set_intersect", [
+    MatchOpInterface,
+    DeclareOpInterfaceMethods<TransformOpInterface>,
+    MemoryEffectsOpInterface,
+    ParamProducerTransformOpTrait,
+    SameOperandsAndResultType]> {
+  let arguments = (ins TransformParamTypeInterface:$lhs,
+                       TransformParamTypeInterface:$rhs);
+  let results = (outs TransformParamTypeInterface:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs)";
+}
+
+def ParamSetDifferenceOp : Op<Transform_Dialect, "param.set_difference", [
+    MatchOpInterface,
+    DeclareOpInterfaceMethods<TransformOpInterface>,
+    MemoryEffectsOpInterface,
+    ParamProducerTransformOpTrait,
+    SameOperandsAndResultType]> {
+  let arguments = (ins TransformParamTypeInterface:$lhs,
+                       TransformParamTypeInterface:$rhs);
+  let results = (outs TransformParamTypeInterface:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs)";
+}
+
+def ParamSetUnionOp : Op<Transform_Dialect, "param.set_union", [
+    MatchOpInterface,
+    DeclareOpInterfaceMethods<TransformOpInterface>,
+    MemoryEffectsOpInterface,
+    ParamProducerTransformOpTrait,
+    SameOperandsAndResultType]> {
+  let arguments = (ins TransformParamTypeInterface:$lhs,
+                       TransformParamTypeInterface:$rhs);
+  let results = (outs TransformParamTypeInterface:$result);
+  let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs)";
 }
 
 def PDLMatchOp : TransformDialectOp<"pdl_match",

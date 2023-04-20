@@ -461,6 +461,42 @@ DiagnosedSilenceableFailure transform::MatchStructuredInputOp::matchOperation(
 
   SmallVector<MappedValue> operandMapping;
   operandMapping.reserve(positions.size());
+
+  if (getIdentityDims() || getPairwiseAddDims()) {
+    // TODO: this should be a verifier check
+    if (positions.size() != 1) {
+      emitOpError() << "wrong config";
+      return DiagnosedSilenceableFailure::definiteFailure();
+    }
+
+    AffineMap indexingMap = linalgOp.getMatchingIndexingMap(
+        linalgOp.getDpsInputOperand(positions[0]));
+
+    Builder builder(current->getContext());
+    SmallVector<Attribute> dims;
+    if (getIdentityDims()) {
+      for (AffineExpr expr : indexingMap.getResults()) {
+        if (auto dim = expr.dyn_cast<AffineDimExpr>()) {
+          dims.push_back(builder.getI64IntegerAttr(dim.getPosition()));
+        }
+      }
+    } else if (getPairwiseAddDims()) {
+      for (AffineExpr expr : indexingMap.getResults()) {
+        auto binExpr = expr.dyn_cast<AffineBinaryOpExpr>();
+        if (!binExpr || binExpr.getKind() != AffineExprKind::Add)
+          continue;
+        auto lhs = binExpr.getLHS().dyn_cast<AffineDimExpr>();
+        auto rhs = binExpr.getRHS().dyn_cast<AffineDimExpr>();
+        if (!lhs || !rhs)
+          continue;
+        dims.push_back(builder.getI64IntegerAttr(lhs.getPosition()));
+        dims.push_back(builder.getI64IntegerAttr(rhs.getPosition()));
+      }
+    }
+    results.setParams(cast<OpResult>(getResult()), dims);
+    return DiagnosedSilenceableFailure::success();
+  }
+
   for (int64_t position : positions) {
     AffineMap indexingMap =
         linalgOp.getMatchingIndexingMap(linalgOp.getDpsInputOperand(position));
