@@ -628,8 +628,11 @@ transform::FuseIntoContainingOp::apply(transform::TransformResults &results,
   while (!remainingProducers.empty()) {
     auto nextProducer = getNextProducer();
     if (failed(nextProducer)) {
-      return mlir::emitSilenceableFailure(containingOp->getLoc())
-             << "could not find next producer to fuse into container";
+      DiagnosedSilenceableFailure diag =
+          emitSilenceableError()
+          << "could not find next producer to fuse into container";
+      diag.attachNote(containingOp->getLoc()) << "container";
+      return diag;
     }
 
     Operation *producerOp = *nextProducer;
