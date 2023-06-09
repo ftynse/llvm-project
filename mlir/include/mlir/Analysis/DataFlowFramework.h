@@ -181,7 +181,7 @@ class DataFlowAnalysis;
 /// The general data-flow analysis solver. This class is responsible for
 /// orchestrating child data-flow analyses, running the fixed-point iteration
 /// algorithm, managing analysis state and program point memory, and tracking
-/// dependencies beteen analyses, program points, and analysis states.
+/// dependencies between analyses, program points, and analysis states.
 ///
 /// Steps to run a data-flow analysis:
 ///
@@ -288,7 +288,7 @@ public:
   /// Create the analysis state at the given program point.
   AnalysisState(ProgramPoint point) : point(point) {}
 
-  /// Returns the program point this static is located at.
+  /// Returns the program point this state is located at.
   ProgramPoint getPoint() const { return point; }
 
   /// Print the contents of the analysis state.

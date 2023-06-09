@@ -16,6 +16,7 @@
 #define MLIR_ANALYSIS_DENSEDATAFLOWANALYSIS_H
 
 #include "mlir/Analysis/DataFlowFramework.h"
+#include "mlir/IR/SymbolTable.h"
 
 namespace mlir {
 
@@ -37,7 +38,13 @@ public:
   using AnalysisState::AnalysisState;
 
   /// Join the lattice across control-flow or callgraph edges.
-  virtual ChangeResult join(const AbstractDenseLattice &rhs) = 0;
+  virtual ChangeResult join(const AbstractDenseLattice &rhs) {
+    return ChangeResult::NoChange;
+  }
+
+  virtual ChangeResult meet(const AbstractDenseLattice &rhs) {
+    return ChangeResult::NoChange;
+  }
 };
 
 //===----------------------------------------------------------------------===//
@@ -108,8 +115,40 @@ protected:
 
 private:
   /// Visit a block. The state at the start of the block is propagated from
-  /// control-flow predecessors or callsites
+  /// control-flow predecessors or callsites.
   void visitBlock(Block *block);
+};
+
+class AbstractDenseBackwardDataFlowAnalysis : public DataFlowAnalysis {
+public:
+  AbstractDenseBackwardDataFlowAnalysis(DataFlowSolver &solver,
+                                        SymbolTableCollection &symbolTable)
+      : DataFlowAnalysis(solver), symbolTable(symbolTable) {}
+
+  LogicalResult initialize(Operation *top) override;
+  LogicalResult visit(ProgramPoint point) override;
+
+protected:
+  virtual void visitOperationImpl(Operation *op,
+                                  const AbstractDenseLattice &after,
+                                  AbstractDenseLattice *before) = 0;
+  virtual AbstractDenseLattice *getLattice(ProgramPoint point) = 0;
+  const AbstractDenseLattice *getLatticeFor(ProgramPoint dependent,
+                                            ProgramPoint point);
+  virtual void setToExitState(AbstractDenseLattice *lattice) = 0;
+  void meet(AbstractDenseLattice *lhs, const AbstractDenseLattice &rhs) {
+    propagateIfChanged(lhs, lhs->meet(rhs));
+  }
+  virtual void processOperation(Operation *op);
+
+  void visitRegionBranchOperation(ProgramPoint point,
+                                  RegionBranchOpInterface branch,
+                                  AbstractDenseLattice *before);
+
+private:
+  void visitBlock(Block *block);
+
+  SymbolTableCollection &symbolTable;
 };
 
 //===----------------------------------------------------------------------===//
