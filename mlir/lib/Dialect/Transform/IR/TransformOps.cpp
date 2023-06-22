@@ -581,7 +581,7 @@ static bool implementSameTransformInterface(Type t1, Type t2) {
 /// consumption effect annotations. If `alsoVerifyInternal`, checks for
 /// annotations being present even if they can be inferred from the body.
 static DiagnosedSilenceableFailure
-verifyFunctionLikeConsumeAnnotations(FunctionOpInterface op,
+verifyFunctionLikeConsumeAnnotations(FunctionOpInterface op, bool emitWarnings,
                                      bool alsoVerifyInternal = false) {
   auto transformOp = cast<transform::TransformOpInterface>(op.getOperation());
   llvm::SmallDenseSet<unsigned> consumedArguments;
@@ -613,12 +613,12 @@ verifyFunctionLikeConsumeAnnotations(FunctionOpInterface op,
              << "argument #" << i
              << " is consumed in the body but is not marked as such";
     }
-    if (!consumedArguments.contains(i) && isConsumed) {
-      Diagnostic warning(op->getLoc(), DiagnosticSeverity::Warning);
-      warning << "argument #" << i
-              << " is not consumed in the body but is marked as consumed";
-      return DiagnosedSilenceableFailure::silenceableFailure(
-          std::move(warning));
+    if (emitWarnings && !consumedArguments.contains(i) && isConsumed) {
+      // Cannot use op.emitWarning() here as it would attempt to verify the op
+      // before printing, resulting in infinite recursion.
+      emitWarning(op->getLoc())
+          << "op argument #" << i
+          << " is not consumed in the body but is marked as consumed";
     }
   }
   return DiagnosedSilenceableFailure::success();
@@ -645,11 +645,13 @@ LogicalResult transform::ForeachMatchOp::verifySymbolUses(
       return emitError() << "unresolved action symbol " << action;
 
     if (failed(verifyFunctionLikeConsumeAnnotations(matcherSymbol,
+                                                    /*emitWarnings=*/false,
                                                     /*alsoVerifyInternal=*/true)
                    .checkAndReport())) {
       return failure();
     }
     if (failed(verifyFunctionLikeConsumeAnnotations(actionSymbol,
+                                                    /*emitWarnings=*/false,
                                                     /*alsoVerifyInternal=*/true)
                    .checkAndReport())) {
       return failure();
@@ -973,7 +975,7 @@ transform::IncludeOp::apply(transform::TransformResults &results,
 }
 
 static DiagnosedSilenceableFailure
-verifyNamedSequenceOp(transform::NamedSequenceOp op);
+verifyNamedSequenceOp(transform::NamedSequenceOp op, bool emitWarnings);
 
 void transform::IncludeOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
@@ -1003,7 +1005,7 @@ void transform::IncludeOp::getEffects(
   if (!callee)
     return defaultEffects();
   DiagnosedSilenceableFailure earlyVerifierResult =
-      verifyNamedSequenceOp(callee);
+      verifyNamedSequenceOp(callee, /*emitWarnings=*/false);
   if (!earlyVerifierResult.succeeded()) {
     (void)earlyVerifierResult.silence();
     return defaultEffects();
@@ -1056,7 +1058,7 @@ transform::IncludeOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   }
 
   return verifyFunctionLikeConsumeAnnotations(
-             cast<FunctionOpInterface>(*target),
+             cast<FunctionOpInterface>(*target), /*emitWarnings=*/false,
              /*alsoVerifyInternal=*/true)
       .checkAndReport();
 }
@@ -1306,7 +1308,7 @@ verifyYieldingSingleBlockOp(FunctionOpInterface op, bool allowExternal) {
 /// immediately, so it can be used to check for op's well-formedness before the
 /// verifier runs, e.g., during trait verification.
 static DiagnosedSilenceableFailure
-verifyNamedSequenceOp(transform::NamedSequenceOp op) {
+verifyNamedSequenceOp(transform::NamedSequenceOp op, bool emitWarnings) {
   if (Operation *parent = op->getParentWithTrait<OpTrait::SymbolTable>()) {
     if (!parent->getAttr(
             transform::TransformDialect::kWithNamedSequenceAttrName)) {
@@ -1329,7 +1331,8 @@ verifyNamedSequenceOp(transform::NamedSequenceOp op) {
   }
 
   if (op.isExternal() || op.getBody().empty())
-    return verifyFunctionLikeConsumeAnnotations(cast<FunctionOpInterface>(*op));
+    return verifyFunctionLikeConsumeAnnotations(cast<FunctionOpInterface>(*op),
+                                                emitWarnings);
 
   if (op.getBody().front().empty())
     return emitSilenceableFailure(op) << "expected a non-empty body block";
@@ -1363,7 +1366,7 @@ verifyNamedSequenceOp(transform::NamedSequenceOp op) {
 
   auto funcOp = cast<FunctionOpInterface>(*op);
   DiagnosedSilenceableFailure diag =
-      verifyFunctionLikeConsumeAnnotations(funcOp);
+      verifyFunctionLikeConsumeAnnotations(funcOp, emitWarnings);
   if (!diag.succeeded())
     return diag;
 
@@ -1373,7 +1376,7 @@ verifyNamedSequenceOp(transform::NamedSequenceOp op) {
 
 LogicalResult transform::NamedSequenceOp::verify() {
   // Actual verification happens in a separate function for reusability.
-  return verifyNamedSequenceOp(*this).checkAndReport();
+  return verifyNamedSequenceOp(*this, /*emitWarnings=*/true).checkAndReport();
 }
 
 //===----------------------------------------------------------------------===//
