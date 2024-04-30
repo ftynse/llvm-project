@@ -12,6 +12,7 @@
 #include "mlir/IR/Action.h"
 #include "mlir/Pass/AnalysisManager.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/Statistic.h"
@@ -121,6 +122,8 @@ public:
   /// Prints out the pass in the textual representation of pipelines. If this is
   /// an adaptor pass, print its pass managers.
   void printAsTextualPipeline(raw_ostream &os);
+
+  void printAsTransformDialectScript(raw_ostream &os, int64_t &ssaNumber);
 
   //===--------------------------------------------------------------------===//
   // Statistics

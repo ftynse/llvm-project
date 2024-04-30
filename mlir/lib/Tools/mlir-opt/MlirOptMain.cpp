@@ -403,6 +403,7 @@ performActions(raw_ostream &os,
   if (failed(config.setupPassPipeline(pm)))
     return failure();
 
+  pm.printAsTransformDialectScript(llvm::errs());
   // Run the pipeline.
   if (failed(pm.run(*op)))
     return failure();

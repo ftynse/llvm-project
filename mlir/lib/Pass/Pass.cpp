@@ -100,6 +100,31 @@ void Pass::printAsTextualPipeline(raw_ostream &os) {
   passOptions.print(os);
 }
 
+void Pass::printAsTransformDialectScript(raw_ostream &os, int64_t &ssaNumber) {
+  if (auto *adaptor = dyn_cast<OpToOpPassAdaptor>(this)) {
+    llvm::interleave(
+        adaptor->getPassManagers(),
+        [&](OpPassManager &pm) {
+          pm.printAsTransformDialectScript(os, ssaNumber);
+        },
+        [&] { os << ","; });
+    return;
+  }
+
+  os << "    %" << (ssaNumber + 1) << " = transform.apply_registered_pass \""
+     << getArgument() << "\" to %" << ssaNumber;
+
+  os << " {options = \"";
+  std::string options;
+  llvm::raw_string_ostream optionsOs(options);
+  passOptions.print(optionsOs);
+  os << llvm::StringRef(optionsOs.str()).trim(" \t\n{}");
+  os << "\"}";
+
+  os << " : (!transform.any_op) -> !transform.any_op\n";
+  ++ssaNumber;
+}
+
 //===----------------------------------------------------------------------===//
 // OpPassManagerImpl
 //===----------------------------------------------------------------------===//
@@ -386,6 +411,37 @@ OpPassManager::getOpName(MLIRContext &context) const {
 
 StringRef OpPassManager::getOpAnchorName() const {
   return impl->getOpAnchorName();
+}
+
+void printAsTransformDialectScript(
+    raw_ostream &os, StringRef anchorName, int64_t &ssaNumber,
+    const llvm::iterator_range<OpPassManager::pass_iterator> &passes) {
+  if (anchorName != OpPassManager::getAnyOpAnchorName()) {
+    os << "    %" << (ssaNumber + 1) << " = transform.structured.match ops{[\""
+       << anchorName << "\"]}" << " in %" << ssaNumber
+       << " : (!transform.any_op) -> !transform.any_op\n";
+    ++ssaNumber;
+  }
+  for (auto &pass : passes) {
+    pass.printAsTransformDialectScript(os, ssaNumber);
+  }
+}
+void OpPassManager::printAsTransformDialectScript(raw_ostream &os,
+                                                  int64_t &ssaNumber) {
+  ::printAsTransformDialectScript(
+      os, getOpAnchorName(), ssaNumber,
+      {MutableArrayRef<std::unique_ptr<Pass>>{impl->passes}.begin(),
+       MutableArrayRef<std::unique_ptr<Pass>>{impl->passes}.end()});
+}
+void OpPassManager::printAsTransformDialectScript(raw_ostream &os) {
+  int64_t ssaNumber = 0;
+  os << "module attributes {transform.with_named_sequence} {\n";
+  os << "  transform.named_sequence @__transform_main(%0: !transform.any_op) "
+        "{\n";
+  printAsTransformDialectScript(os, ssaNumber);
+  os << "    transform.yield\n";
+  os << "  }\n";
+  os << "}\n\n";
 }
 
 /// Prints out the passes of the pass manager as the textual representation
