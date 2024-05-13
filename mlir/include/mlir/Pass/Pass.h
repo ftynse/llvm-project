@@ -123,7 +123,8 @@ public:
   /// an adaptor pass, print its pass managers.
   void printAsTextualPipeline(raw_ostream &os);
 
-  void printAsTransformDialectScript(raw_ostream &os, int64_t &ssaNumber);
+  void printAsTransformDialectScript(raw_ostream &os, int64_t &ssaNumber,
+                                     int64_t &operandSsaNumber);
 
   //===--------------------------------------------------------------------===//
   // Statistics

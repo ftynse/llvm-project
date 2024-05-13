@@ -146,7 +146,8 @@ public:
   /// Note: The quality of the string representation depends entirely on the
   /// the correctness of per-pass overrides of Pass::printAsTextualPipeline.
   void printAsTextualPipeline(raw_ostream &os) const;
-  void printAsTransformDialectScript(raw_ostream &os, int64_t &ssaNumber);
+  void printAsTransformDialectScript(raw_ostream &os, int64_t &ssaNumber,
+                                     int64_t operandSsaNumber);
   void printAsTransformDialectScript(raw_ostream &os);
 
   /// Raw dump of the pass manager to llvm::errs().

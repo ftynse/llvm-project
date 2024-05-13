@@ -100,29 +100,33 @@ void Pass::printAsTextualPipeline(raw_ostream &os) {
   passOptions.print(os);
 }
 
-void Pass::printAsTransformDialectScript(raw_ostream &os, int64_t &ssaNumber) {
+void Pass::printAsTransformDialectScript(raw_ostream &os, int64_t &ssaNumber,
+                                         int64_t &operandSsaNumber) {
   if (auto *adaptor = dyn_cast<OpToOpPassAdaptor>(this)) {
     llvm::interleave(
         adaptor->getPassManagers(),
         [&](OpPassManager &pm) {
-          pm.printAsTransformDialectScript(os, ssaNumber);
+          pm.printAsTransformDialectScript(os, ssaNumber, operandSsaNumber);
         },
-        [&] { os << ","; });
+        [&] { os << "\n    "; });
     return;
   }
 
   os << "    %" << (ssaNumber + 1) << " = transform.apply_registered_pass \""
-     << getArgument() << "\" to %" << ssaNumber;
+     << getArgument() << "\" to %" << operandSsaNumber;
 
-  os << " {options = \"";
   std::string options;
   llvm::raw_string_ostream optionsOs(options);
   passOptions.print(optionsOs);
-  os << llvm::StringRef(optionsOs.str()).trim(" \t\n{}");
-  os << "\"}";
+  optionsOs.flush();
+  if (!options.empty()) {
+    os << " {options = \"";
+    os << llvm::StringRef(options).trim(" \t\n{}");
+    os << "\"}";
+  }
 
   os << " : (!transform.any_op) -> !transform.any_op\n";
-  ++ssaNumber;
+  operandSsaNumber = ++ssaNumber;
 }
 
 //===----------------------------------------------------------------------===//
@@ -415,30 +419,37 @@ StringRef OpPassManager::getOpAnchorName() const {
 
 void printAsTransformDialectScript(
     raw_ostream &os, StringRef anchorName, int64_t &ssaNumber,
+    int64_t operandSsaNumber,
     const llvm::iterator_range<OpPassManager::pass_iterator> &passes) {
+  // TODO: need SSA number of the last module before entering the func.func,
+  // rather than the last produced by last func.func pass
+  int64_t localOperandSsaNumber = operandSsaNumber;
   if (anchorName != OpPassManager::getAnyOpAnchorName()) {
-    os << "    %" << (ssaNumber + 1) << " = transform.structured.match ops{[\""
-       << anchorName << "\"]}" << " in %" << ssaNumber
+    os << "    %" << ++ssaNumber << " = transform.structured.match ops{[\""
+       << anchorName << "\"]}" << " in %" << operandSsaNumber
        << " : (!transform.any_op) -> !transform.any_op\n";
-    ++ssaNumber;
+    localOperandSsaNumber = ssaNumber;
   }
   for (auto &pass : passes) {
-    pass.printAsTransformDialectScript(os, ssaNumber);
+    pass.printAsTransformDialectScript(os, ssaNumber, localOperandSsaNumber);
   }
 }
+
 void OpPassManager::printAsTransformDialectScript(raw_ostream &os,
-                                                  int64_t &ssaNumber) {
+                                                  int64_t &ssaNumber,
+                                                  int64_t operandSsaNumber) {
   ::printAsTransformDialectScript(
-      os, getOpAnchorName(), ssaNumber,
+      os, getOpAnchorName(), ssaNumber, operandSsaNumber,
       {MutableArrayRef<std::unique_ptr<Pass>>{impl->passes}.begin(),
        MutableArrayRef<std::unique_ptr<Pass>>{impl->passes}.end()});
 }
+
 void OpPassManager::printAsTransformDialectScript(raw_ostream &os) {
   int64_t ssaNumber = 0;
   os << "module attributes {transform.with_named_sequence} {\n";
   os << "  transform.named_sequence @__transform_main(%0: !transform.any_op) "
         "{\n";
-  printAsTransformDialectScript(os, ssaNumber);
+  printAsTransformDialectScript(os, ssaNumber, ssaNumber);
   os << "    transform.yield\n";
   os << "  }\n";
   os << "}\n\n";
