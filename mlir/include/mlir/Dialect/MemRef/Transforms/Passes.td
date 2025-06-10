@@ -11,6 +11,10 @@
 
 include "mlir/Pass/PassBase.td"
 
+// TODO: this should move to the test library
+def TestInUseAnalysisPass : Pass<"memref-test-in-use-analysis"> {
+}
+
 def AssertInBoundsPass : Pass<"memref-assert-in-bounds"> {
   let summary = "Insert assertions that memref accesses are in bounds.";
   let dependentDialects = [
