@@ -23,8 +23,18 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/TypeSwitch.h"
 
+#include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+
 namespace mlir {
 #define GEN_PASS_DEF_SCFFORLOOPCANONICALIZATION
+#include "mlir/Dialect/SCF/Transforms/Passes.h.inc"
+
+#define GEN_PASS_DEF_SCFIFCONDITIONPROPAGATION
+#include "mlir/Dialect/SCF/Transforms/Passes.h.inc"
+
+#define GEN_PASS_DEF_SCFRESTRICTEDCANONICALIZE
 #include "mlir/Dialect/SCF/Transforms/Passes.h.inc"
 } // namespace mlir
 
@@ -187,3 +197,89 @@ void mlir::scf::populateSCFForLoopCanonicalizationPatterns(
 std::unique_ptr<Pass> mlir::createSCFForLoopCanonicalizationPass() {
   return std::make_unique<SCFForLoopCanonicalization>();
 }
+
+static void propagateIfConditionsImpl(Operation *root,
+                                      llvm::SmallPtrSet<Region *, 8> &visited) {
+  //
+  if (auto scfIf = dyn_cast<scf::IfOp>(root)) {
+    llvm::SmallPtrSet<Region *, 8> thenChildren, elseChildren;
+    // visit then, collect children
+    for (Block &block : scfIf.getThenRegion()) {
+      for (Operation &op : block) {
+        propagateIfConditionsImpl(&op, thenChildren);
+      }
+    }
+
+    // visit else, collect children
+    for (Block &block : scfIf.getElseRegion()) {
+      for (Operation &op : block) {
+        propagateIfConditionsImpl(&op, elseChildren);
+      }
+    }
+
+    OpBuilder builder(scfIf);
+    Value trueValue = arith::ConstantIntOp::create(builder, scfIf.getLoc(),
+                                                   builder.getBoolAttr(true));
+    Value falseValue = arith::ConstantIntOp::create(builder, scfIf.getLoc(),
+                                                    builder.getBoolAttr(false));
+
+    for (OpOperand &use : scfIf.getCondition().getUses()) {
+      if (thenChildren.contains(use.getOwner()->getParentRegion()))
+        use.set(trueValue);
+      else if (elseChildren.contains(use.getOwner()->getParentRegion()))
+        use.set(falseValue);
+    }
+    if (trueValue.getUses().empty())
+      trueValue.getDefiningOp()->erase();
+    if (falseValue.getUses().empty())
+      falseValue.getDefiningOp()->erase();
+
+    // append the two lists of children and return them
+    visited.insert_range(thenChildren);
+    visited.insert_range(elseChildren);
+    return;
+  }
+
+  for (Region &region : root->getRegions()) {
+    for (Block &block : region) {
+      for (Operation &op : block) {
+        propagateIfConditionsImpl(&op, visited);
+      }
+    }
+  }
+}
+
+static void propagateIfConditions(Operation *root) {
+  llvm::SmallPtrSet<Region *, 8> visited;
+  propagateIfConditionsImpl(root, visited);
+}
+
+struct SCFIfConditionPropagationPass
+    : impl::SCFIfConditionPropagationBase<SCFIfConditionPropagationPass> {
+  void runOnOperation() override { propagateIfConditions(getOperation()); }
+};
+
+struct SCFRestrictedCanonicalizePass
+    : impl::SCFRestrictedCanonicalizeBase<SCFRestrictedCanonicalizePass> {
+  void runOnOperation() override {
+    RewritePatternSet patterns(&getContext());
+    // getContext().getOrLoadDialect<memref::MemRefDialect>()->getCanonicalizationPatterns(patterns);
+    getContext()
+        .getOrLoadDialect<scf::SCFDialect>()
+        ->getCanonicalizationPatterns(patterns);
+    getContext()
+        .getOrLoadDialect<cf::ControlFlowDialect>()
+        ->getCanonicalizationPatterns(patterns);
+    getContext()
+        .getOrLoadDialect<arith::ArithDialect>()
+        ->getCanonicalizationPatterns(patterns);
+    getContext()
+        .getOrLoadDialect<LLVM::LLVMDialect>()
+        ->getCanonicalizationPatterns(patterns);
+    getContext()
+        .getOrLoadDialect<math::MathDialect>()
+        ->getCanonicalizationPatterns(patterns);
+    (void)applyPatternsGreedily(getOperation(), std::move(patterns),
+                          GreedyRewriteConfig().setMaxNumRewrites(1000000));
+  }
+};

@@ -21,6 +21,15 @@ def SCFForLoopCanonicalization
                            "memref::MemRefDialect"];
 }
 
+def SCFIfConditionPropagation : Pass<"scf-if-condition-propagation"> {
+  let dependentDialects = ["arith::ArithDialect"];
+}
+
+def SCFRestrictedCanonicalize : Pass<"scf-restricted-canonicalize"> {
+  let dependentDialects = ["arith::ArithDialect", "math::MathDialect", "LLVM::LLVMDialect",
+    "cf::ControlFlowDialect"];
+}
+
 def SCFForLoopPeeling : Pass<"scf-for-loop-peeling"> {
   let summary = "Peel `for` loops at their upper bounds.";
   let constructor = "mlir::createForLoopPeelingPass()";

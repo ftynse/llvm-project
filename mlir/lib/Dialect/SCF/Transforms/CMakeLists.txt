@@ -41,4 +41,6 @@ add_mlir_dialect_library(MLIRSCFTransforms
   MLIRTensorTransforms
   MLIRTransforms
   MLIRTransformUtils
+  MLIRLLVMDialect
+  MLIRMathDialect
 )
