@@ -88,6 +88,25 @@ set(SOURCES
   src/comgr-unbundle-command.cpp
   src/time-stat/time-stat.cpp)
 
+# Salmon binary transpiler, opt-in. The salmon project lives at
+# amd/salmon/ as a sibling CMake subproject.
+# When enabled, we compile the comgr-hotswap-salmon.cpp entry point and link
+# the salmon static library into amd_comgr; when disabled, the
+# amd_comgr_hotswap_transpile API is simply not provided.
+option(COMGR_ENABLE_SALMON
+  "Build the salmon-backed amd_comgr_hotswap_transpile entry point" OFF)
+set(COMGR_SALMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../salmon"
+  CACHE PATH "Path to the salmon (hotswap-transpiler) CMake subproject")
+if(COMGR_ENABLE_SALMON)
+  if(NOT EXISTS "${COMGR_SALMON_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR
+      "COMGR_ENABLE_SALMON=ON but no CMakeLists.txt found at "
+      "COMGR_SALMON_DIR='${COMGR_SALMON_DIR}'. Point COMGR_SALMON_DIR at "
+      "the salmon source tree or set COMGR_ENABLE_SALMON=OFF.")
+  endif()
+  list(APPEND SOURCES src/comgr-hotswap-salmon.cpp)
+endif()
+
 # Add Windows resource file for version info
 if(WIN32)
   # Allow users to override the DLL name via -DCOMGR_DLL_NAME
@@ -166,6 +185,28 @@ target_include_directories(amd_comgr
   PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+# The salmon CMakeLists exposes the hotswap-transpiler static library and
+# the HOTSWAP_TRANSPILER_* discovery variables (see amd/salmon/CMakeLists.txt
+# for the contract); it does not build its own raise_cli / tests when
+# consumed via add_subdirectory.
+if(COMGR_ENABLE_SALMON)
+  if(NOT TARGET hotswap-transpiler)
+    add_subdirectory("${COMGR_SALMON_DIR}"
+                     "${CMAKE_CURRENT_BINARY_DIR}/salmon")
+  endif()
+  if(NOT HOTSWAP_TRANSPILER_FOUND)
+    message(FATAL_ERROR
+      "COMGR_ENABLE_SALMON=ON but the salmon CMake subproject at "
+      "'${COMGR_SALMON_DIR}' did not export HOTSWAP_TRANSPILER_FOUND. "
+      "Update salmon to a revision that sets the HOTSWAP_TRANSPILER_* "
+      "variables.")
+  endif()
+  target_include_directories(amd_comgr PRIVATE
+    ${HOTSWAP_TRANSPILER_INCLUDE_DIRS})
+  target_link_libraries(amd_comgr PRIVATE ${HOTSWAP_TRANSPILER_LIBRARIES})
+  target_compile_definitions(amd_comgr PRIVATE COMGR_ENABLE_SALMON=1)
+endif()
+
 message("")
 message("------------LLVM_DIR: ${LLVM_DIR}")
 message("---LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
@@ -174,6 +215,9 @@ message("-----------Clang_DIR: ${Clang_DIR}")
 message("--CLANG_INCLUDE_DIRS: ${CLANG_INCLUDE_DIRS}")
 message("----LLD_INCLUDE_DIRS: ${LLD_INCLUDE_DIRS}")
 message("---AMDDeviceLibs_DIR: ${AMDDeviceLibs_DIR}")
+if(COMGR_ENABLE_SALMON)
+  message("----COMGR_SALMON_DIR: ${COMGR_SALMON_DIR}")
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 

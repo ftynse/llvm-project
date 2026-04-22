@@ -2732,6 +2732,53 @@ amd_comgr_hotswap_rewrite(
     const char *target_isa_name,
     amd_comgr_data_t *output) AMD_COMGR_VERSION_3_2;
 
+/**
+ * @brief Transpile a code object from one ISA to another via the salmon
+ * binary transpiler.
+ *
+ * Where @c amd_comgr_hotswap_rewrite applies a small set of byte-level
+ * stepping patches in place, this entry point hands the entire code object
+ * to the salmon pipeline: every kernel is disassembled, raised to LLVM IR,
+ * re-lowered through the stock AMDGPU backend for @p target_isa_name, and
+ * relinked into a single merged HSACO. Use this when the source and target
+ * ISAs differ enough that no in-place patch sequence exists (cross-family
+ * translation, wave-size cross-widening, or any other transformation
+ * outside the byte-level rewrite policy's coverage).
+ *
+ * The input ELF is not modified; a new data object is created and returned.
+ *
+ * @param[in] input A data object of kind @p AMD_COMGR_DATA_KIND_EXECUTABLE
+ *   containing the input ELF code object bytes.
+ * @param[in] source_isa_name A null terminated string that is the isa name
+ *   the code object was compiled for. The isa name is defined as the Code
+ *   Object Target Identification string, described at
+ *   https://llvm.org/docs/AMDGPUUsage.html#code-object-target-identification
+ * @param[in] target_isa_name A null terminated string that is the isa name
+ *   of the target GPU. May differ from @p source_isa_name across processor
+ *   families.
+ * @param[out] output A handle to a data object of kind @p
+ *   AMD_COMGR_DATA_KIND_EXECUTABLE containing the transpiled ELF. The
+ *   caller must release this handle using @c amd_comgr_release_data when
+ *   done. @p output is not modified on failure.
+ *
+ * @retval ::AMD_COMGR_STATUS_SUCCESS Transpilation completed successfully.
+ * @retval ::AMD_COMGR_STATUS_ERROR The salmon pipeline failed for at least
+ *   one kernel (unsupported instruction, raise failure, or backend
+ *   compilation/link failure). Diagnostic detail is logged to stderr.
+ * @retval ::AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT @p input is an invalid
+ *   data object, is not of kind @p AMD_COMGR_DATA_KIND_EXECUTABLE, does not
+ *   contain data bytes, or @p source_isa_name or @p target_isa_name is
+ *   NULL or malformed.
+ * @retval ::AMD_COMGR_STATUS_ERROR_OUT_OF_RESOURCES Unable to allocate
+ *   the output data object.
+ */
+amd_comgr_status_t AMD_COMGR_API
+amd_comgr_hotswap_transpile(
+    amd_comgr_data_t input,
+    const char *source_isa_name,
+    const char *target_isa_name,
+    amd_comgr_data_t *output) AMD_COMGR_VERSION_3_2;
+
 /** @} */
 
 #ifdef __cplusplus

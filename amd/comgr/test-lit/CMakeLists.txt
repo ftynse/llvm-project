@@ -7,6 +7,7 @@ function(cannonicalize_cmake_boolean var)
 endfunction()
 
 cannonicalize_cmake_boolean(COMGR_DISABLE_SPIRV)
+cannonicalize_cmake_boolean(COMGR_ENABLE_SALMON)
 
 configure_file(lit.site.cfg.py.in lit.site.cfg.py @ONLY)
 
@@ -53,5 +54,8 @@ add_comgr_lit_binary(status-string c)
 add_comgr_lit_binary(data-action c)
 add_comgr_lit_binary(lookup-code-object c)
 add_comgr_lit_binary(hotswap-rewrite c)
+if(COMGR_ENABLE_SALMON)
+  add_comgr_lit_binary(hotswap-transpile c)
+endif()
 
 add_dependencies(check-comgr test-lit)
