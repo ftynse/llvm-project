@@ -23,7 +23,7 @@ endif()
 # uses AMDGPU target-private headers (SIDefines.h, SIInstrInfo.h,
 # AMDGPUBaseInfo.h) which transitively #include TableGen-generated
 # AMDGPUGen*.inc files. Those .inc files are produced by llvm-tblgen during
-# the LLVM build and are not copied by `ninja install`.
+# the LLVM build and are not copied by the `install` target.
 #
 # We support three configurations:
 #
@@ -38,7 +38,7 @@ endif()
 #      populated; the find_package call below becomes a no-op.
 #
 #   3. Standalone (cmake -S amd/salmon -B build). We need find_package(LLVM)
-#      to resolve LLVM_DIR. Since salmon now lives at <llvm-project>/amd/
+#      to resolve LLVM_DIR. Since salmon lives at <llvm-project>/amd/
 #      salmon, default LLVM_DIR to the conventional <llvm-project>/build
 #      tree if the user did not pass one explicitly.
 if(TARGET LLVMSupport AND DEFINED LLVM_MAIN_SRC_DIR)
@@ -273,6 +273,125 @@ if(HOTSWAP_TRANSPILER_BUILD_TOOLS)
 add_executable(raise_cli raise_cli.cpp)
 target_link_libraries(raise_cli PRIVATE hotswap-transpiler)
 llvm_update_compile_flags(raise_cli)
+
+# --- salmon-tblgen ------------------------------------------------------------
+# A standalone TableGen driver that reuses LLVM's `TableGenMain` and the
+# `TableGen::Emitter::Opt` registration mechanism. Each generator backend
+# lives in its own translation unit under `tools/salmon_tablegen/` and
+# registers itself as a `--gen-<name>` command-line option through a global
+# initializer; the driver itself just calls `TableGenMain`.
+#
+# Currently shipped generators:
+#   --gen-amdgcn-mcinst-wrappers   one C++ wrapper class per AMDGCN
+#                                  encoding family around `llvm::MCInst`
+#                                  (mcinst_wrapper_gen.cpp).
+#   --gen-amdgcn-canon-table       static `kEntries[]` array binding each
+#                                  AMDGPU canonical pseudo to a Salmon
+#                                  `SemOp`, derived from the `SalmonOp`
+#                                  records in `td/SalmonAMDGCN.td`
+#                                  (canon_table_gen.cpp).
+#
+# The tool is intentionally MLIR-free: it only depends on LLVM's TableGen
+# and Support libraries.
+add_executable(salmon-tblgen
+  tools/salmon_tablegen/salmon_tablegen.cpp
+  tools/salmon_tablegen/mcinst_wrapper_gen.cpp
+  tools/salmon_tablegen/canon_table_gen.cpp
+)
+llvm_update_compile_flags(salmon-tblgen)
+target_link_libraries(salmon-tblgen PRIVATE
+  LLVMTableGen
+  LLVMSupport
+  LLVMDemangle
+)
+set_target_properties(salmon-tblgen PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# --- Generated AMDGCN MCInst wrapper header -----------------------------------
+# Run `salmon-tblgen --gen-amdgcn-mcinst-wrappers` over LLVM's `AMDGPU.td`
+# to produce one C++ wrapper class per AMDGPU encoding family (VOP1, VOP2,
+# DS, FLAT, ...). Consumers `#include "salmon/amdgcn_mcinst_wrappers.h.inc"`
+# and use it as
+#
+#   namespace mcw = transpiler::amdgcn::mcwrap;
+#   mcw::InstWrapper base(di.inst, *ctx.mc.instrInfo);
+#   if (auto *ds = llvm::dyn_cast<mcw::DSWrapper>(&base)) {
+#     if (auto *off0 = ds->offset0()) { ... }
+#   }
+#
+# The header is regenerated whenever `salmon-tblgen` itself or any `.td` file
+# under LLVM's AMDGPU target changes, so it tracks the upstream operand
+# tables without manual maintenance.
+set(_salmon_amdgpu_td "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/AMDGPU.td")
+set(_salmon_wrappers_inc
+    "${CMAKE_CURRENT_BINARY_DIR}/include/salmon/amdgcn_mcinst_wrappers.h.inc")
+
+# Track every .td under AMDGPU so the custom command reruns when any of them
+# changes (the actual include resolution happens via `-I` at runtime).
+file(GLOB_RECURSE _salmon_amdgpu_td_deps
+     "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/*.td")
+
+add_custom_command(
+  OUTPUT "${_salmon_wrappers_inc}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+          "${CMAKE_CURRENT_BINARY_DIR}/include/salmon"
+  COMMAND "$<TARGET_FILE:salmon-tblgen>"
+          --gen-amdgcn-mcinst-wrappers
+          -I "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
+          -I "${LLVM_BUILD_MAIN_SRC_DIR}/include"
+          -o "${_salmon_wrappers_inc}"
+          "${_salmon_amdgpu_td}"
+  DEPENDS salmon-tblgen "${_salmon_amdgpu_td}" ${_salmon_amdgpu_td_deps}
+  COMMENT "salmon-tblgen: generating AMDGCN MCInst family wrappers"
+  VERBATIM
+)
+add_custom_target(salmon-amdgcn-mcinst-wrappers DEPENDS "${_salmon_wrappers_inc}")
+
+# --- Generated AMDGCN canonical-opcode -> SemOp table -------------------------
+# Run `salmon-tblgen --gen-amdgcn-canon-table` over Salmon's own
+# `td/SalmonAMDGCN.td`, which `include "AMDGPU.td"`s the upstream target
+# description and decorates a curated subset of `Instruction` records with
+# `SalmonOp` rows. The backend walks every `SalmonOp` and emits the static
+# `kEntries[]` array consumed by `OpcodeMap::build` in opcode_map.cpp.
+#
+# The header is regenerated whenever:
+#   * `salmon-tblgen` itself rebuilds (new generator behaviour),
+#   * any `.td` under LLVM's AMDGPU target changes (upstream record drift),
+#   * `td/SalmonAMDGCN.td` changes (Salmon-side curation update).
+set(_salmon_canon_td "${CMAKE_CURRENT_SOURCE_DIR}/td/SalmonAMDGCN.td")
+set(_salmon_canon_inc
+    "${CMAKE_CURRENT_BINARY_DIR}/include/salmon/amdgcn_canon_table.h.inc")
+
+add_custom_command(
+  OUTPUT "${_salmon_canon_inc}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+          "${CMAKE_CURRENT_BINARY_DIR}/include/salmon"
+  COMMAND "$<TARGET_FILE:salmon-tblgen>"
+          --gen-amdgcn-canon-table
+          -I "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
+          -I "${LLVM_BUILD_MAIN_SRC_DIR}/include"
+          -I "${CMAKE_CURRENT_SOURCE_DIR}/td"
+          -o "${_salmon_canon_inc}"
+          "${_salmon_canon_td}"
+  DEPENDS salmon-tblgen "${_salmon_canon_td}" "${_salmon_amdgpu_td}"
+          ${_salmon_amdgpu_td_deps}
+  COMMENT "salmon-tblgen: generating AMDGCN canonical-opcode table"
+  VERBATIM
+)
+add_custom_target(salmon-amdgcn-canon-table DEPENDS "${_salmon_canon_inc}")
+
+# Wire the generated headers into the transpiler library so any handler /
+# decode TU can `#include "salmon/amdgcn_mcinst_wrappers.h.inc"` or
+# `#include "salmon/amdgcn_canon_table.h.inc"`. The path is PUBLIC so
+# consumers like `transpiler_tests` see it too.
+target_include_directories(hotswap-transpiler PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+)
+add_dependencies(hotswap-transpiler
+  salmon-amdgcn-mcinst-wrappers
+  salmon-amdgcn-canon-table
+)
 
 # --- GoogleTest-based unified test binary -------------------------------------
 find_package(GTest REQUIRED)

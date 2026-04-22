@@ -1,9 +1,10 @@
 #include "handlers.hpp"
 
-#include "amdgpu_formats.hpp" // SIInstrFlags
+#include "Utils/AMDGPUBaseInfo.h" // AMDGPU::OpName
+#include "amdgpu_formats.hpp"     // SIInstrFlags
 #include "opcode_map.hpp"
+#include "salmon/amdgcn_mcinst_wrappers.h.inc" // transpiler::amdgcn::mcwrap
 #include "semop.hpp"
-#include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx, AMDGPU::OpName
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
@@ -12,6 +13,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
+#include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -20,6 +22,8 @@
 using namespace llvm;
 
 namespace transpiler {
+
+namespace mcw = ::transpiler::amdgcn::mcwrap;
 
 // =========================================================================
 // SemOp -> Intrinsic::ID is the one piece of MFMA metadata LLVM does not
@@ -76,27 +80,31 @@ static const DenseMap<SemOp, Intrinsic::ID> &mfmaIntrinsicTable() {
   return *table;
 }
 
-// Read a named immediate operand, or return `fallback` if the opcode does
-// not expose that name. Using `getNamedOperandIdx` instead of positional
-// scanning of the trailing source list means any future operand reshuffle
-// in AMDGPU TableGen flows in for free.
-static int64_t readNamedImm(const DecodedInst &di, AMDGPU::OpName name,
+// Read a named immediate operand off the InstWrapper, or return
+// `fallback` if the opcode does not expose that name (or carries a
+// non-immediate in that slot). The InstWrapper folds the
+// `getNamedOperandIdx` + bounds-check into a single `getNamedOperand`
+// call and is robust against any future operand reshuffle in AMDGPU
+// TableGen.
+static int64_t readNamedImm(const mcw::InstWrapper &iw, AMDGPU::OpName name,
                             int64_t fallback = 0) {
-  int idx = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(), name);
-  if (idx < 0 || !di.isImm(idx))
+  const MCOperand *op = iw.getNamedOperand(name);
+  if (op == nullptr || !op->isImm())
     return fallback;
-  return di.getImm(idx);
+  return op->getImm();
 }
 
 // Read a named register operand as a 32-bit value. Returns `fallback`
 // when the named operand is absent or not a register (e.g. when the
 // encoding carries an immediate in the same slot).
 static Value *readNamedReg32(RaiseContext &ctx, const DecodedInst &di,
-                             AMDGPU::OpName name, Value *fallback) {
-  int idx = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(), name);
-  if (idx < 0 || !di.isReg(idx))
+                             const mcw::InstWrapper &iw, AMDGPU::OpName name,
+                             Value *fallback) {
+  const MCOperand *op = iw.getNamedOperand(name);
+  if (op == nullptr || !op->isReg())
     return fallback;
-  ParsedReg pr = ctx.parseReg(di.getReg(idx), idx);
+  int idx = iw.getNamedOperandIdx(name);
+  ParsedReg pr = ctx.parseReg(op->getReg(), idx);
   if (pr.kind == ParsedReg::OTHER || pr.kind == ParsedReg::NOREG)
     return fallback;
   return ctx.regs.readReg32(ctx.B, pr);
@@ -139,7 +147,7 @@ HandlerResult handleMFMA(RaiseContext &ctx, const DecodedInst &di,
   // and we must supply the overload types. AMDGPU kernels uniformly use
   // a v8i32 A/B layout (the widest F8 case) and select the active format
   // via `cbsz` / `blgp`, so we pass `{v8i32, v8i32}` here.
-  auto *v8i32Ty = FixedVectorType::get(ctx.i32Ty, 8);
+  FixedVectorType *v8i32Ty = FixedVectorType::get(ctx.i32Ty, 8);
   SmallVector<Type *, 2> overloads;
   if (Intrinsic::isOverloaded(intrId))
     overloads = {v8i32Ty, v8i32Ty};
@@ -172,8 +180,19 @@ HandlerResult handleMFMA(RaiseContext &ctx, const DecodedInst &di,
   // Immediate modifiers keyed off the authoritative named-operand table.
   // `cbsz` is common to both families; `abid` is non-scaled only; scaled
   // instead carries `blgp` + four scale control operands.
-  Value *cbsz = ConstantInt::get(ctx.i32Ty, readNamedImm(di, AMDGPU::OpName::cbsz));
-  Value *blgp = ConstantInt::get(ctx.i32Ty, readNamedImm(di, AMDGPU::OpName::blgp));
+  //
+  // The MFMA opcode set spans both `VOP3` (non-scaled MAI) and `VOP3P`
+  // (gfx950 scaled MAI) family bits, and the scaled VOP3P variants do
+  // NOT expose `cbsz` / `blgp` on `VOP3PWrapper`. We therefore use the
+  // base `InstWrapper`'s public `getNamedOperand` API rather than
+  // `dyn_cast`-ing to a specific family wrapper here; the lookup
+  // safely returns `nullptr` (and `readNamedImm` falls back to 0) for
+  // any operand that does not exist on the concrete opcode.
+  mcw::InstWrapper iw(di.inst, *ctx.mc.instrInfo);
+  Value *cbsz =
+      ConstantInt::get(ctx.i32Ty, readNamedImm(iw, AMDGPU::OpName::cbsz));
+  Value *blgp =
+      ConstantInt::get(ctx.i32Ty, readNamedImm(iw, AMDGPU::OpName::blgp));
 
   Function *mfmaFn = Intrinsic::getOrInsertDeclaration(&ctx.M, intrId, overloads);
 
@@ -185,19 +204,19 @@ HandlerResult handleMFMA(RaiseContext &ctx, const DecodedInst &di,
     // repurposed `src0_modifiers` / `src1_modifiers` immediate slots.
     Value *zero = ConstantInt::get(ctx.i32Ty, 0);
     Value *opSelA = ConstantInt::get(
-        ctx.i32Ty, readNamedImm(di, AMDGPU::OpName::src0_modifiers));
+        ctx.i32Ty, readNamedImm(iw, AMDGPU::OpName::src0_modifiers));
     Value *opSelB = ConstantInt::get(
-        ctx.i32Ty, readNamedImm(di, AMDGPU::OpName::src1_modifiers));
+        ctx.i32Ty, readNamedImm(iw, AMDGPU::OpName::src1_modifiers));
     Value *scaleA =
-        readNamedReg32(ctx, di, AMDGPU::OpName::scale_src0, zero);
+        readNamedReg32(ctx, di, iw, AMDGPU::OpName::scale_src0, zero);
     Value *scaleB =
-        readNamedReg32(ctx, di, AMDGPU::OpName::scale_src1, zero);
+        readNamedReg32(ctx, di, iw, AMDGPU::OpName::scale_src1, zero);
     callRet = ctx.B.CreateCall(
         mfmaFn, {a, b, c, cbsz, blgp, opSelA, scaleA, opSelB, scaleB},
         "mfma_scale");
   } else {
-    Value *abid = ConstantInt::get(
-        ctx.i32Ty, readNamedImm(di, AMDGPU::OpName::abid));
+    Value *abid =
+        ConstantInt::get(ctx.i32Ty, readNamedImm(iw, AMDGPU::OpName::abid));
     callRet =
         ctx.B.CreateCall(mfmaFn, {a, b, c, cbsz, abid, blgp}, "mfma");
   }

@@ -1,7 +1,8 @@
 #include "handlers.hpp"
 
+#include "Utils/AMDGPUBaseInfo.h" // AMDGPU::OpName, getNamedOperandIdx
+#include "salmon/amdgcn_mcinst_wrappers.h.inc" // transpiler::amdgcn::mcwrap
 #include "semop.hpp"
-#include "Utils/AMDGPUBaseInfo.h" // AMDGPU::getNamedOperandIdx
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -10,6 +11,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/MCInst.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstring>
 #include <map>
@@ -19,6 +21,8 @@
 using namespace llvm;
 
 namespace transpiler {
+
+namespace mcw = ::transpiler::amdgcn::mcwrap;
 HandlerResult handleDS(RaiseContext &ctx, const DecodedInst &di,
                         OpResolver &op) {
   HandlerResult hr;
@@ -398,24 +402,24 @@ HandlerResult handleDS(RaiseContext &ctx, const DecodedInst &di,
   {
     auto [ds2IsRead, ds2WidthBits, ds2UnitBytes] = ds2Classify(sop);
     if (ds2UnitBytes > 0) {
-      unsigned opc = di.inst.getOpcode();
-      int off0Idx = AMDGPU::getNamedOperandIdx(opc, AMDGPU::OpName::offset0);
-      int off1Idx = AMDGPU::getNamedOperandIdx(opc, AMDGPU::OpName::offset1);
-      if (off0Idx < 0 || off1Idx < 0 ||
-          static_cast<unsigned>(off0Idx) >= di.inst.getNumOperands() ||
-          static_cast<unsigned>(off1Idx) >= di.inst.getNumOperands() ||
-          !di.inst.getOperand(static_cast<unsigned>(off0Idx)).isImm() ||
-          !di.inst.getOperand(static_cast<unsigned>(off1Idx)).isImm()) {
+      // DS_READ2/WRITE2 are by construction `DS` family opcodes, so a
+      // direct `DSWrapper` view is safe (we never reach this branch on
+      // a non-DS opcode, since `ds2Classify` already returned 0). The
+      // wrapper folds `getNamedOperandIdx` + bounds check into a single
+      // `nullptr`-or-pointer return per named operand.
+      mcw::DSWrapper dsw(di.inst, *ctx.mc.instrInfo);
+      const MCOperand *off0 = dsw.offset0();
+      const MCOperand *off1 = dsw.offset1();
+      if (off0 == nullptr || off1 == nullptr || !off0->isImm() ||
+          !off1->isImm()) {
         hr.failure = RaiseFailure::unsupportedShape(
             di, "DS",
             "DS_READ2/WRITE2 missing OpName::offset0 or OpName::offset1 "
             "immediate operand — operand table mismatch");
         return hr;
       }
-      int64_t rawOff0 =
-          di.inst.getOperand(static_cast<unsigned>(off0Idx)).getImm();
-      int64_t rawOff1 =
-          di.inst.getOperand(static_cast<unsigned>(off1Idx)).getImm();
+      int64_t rawOff0 = off0->getImm();
+      int64_t rawOff1 = off1->getImm();
       int64_t byteOff0 = rawOff0 * ds2UnitBytes;
       int64_t byteOff1 = rawOff1 * ds2UnitBytes;
 
@@ -814,17 +818,22 @@ HandlerResult handleDS(RaiseContext &ctx, const DecodedInst &di,
     // positional `op.src(0)` for consistency with their existing
     // patterns; the named-lookup audit there is a system-wide cleanup
     // outside the scope of P6.)
-    int addrIdx = AMDGPU::getNamedOperandIdx(di.inst.getOpcode(),
-                                              AMDGPU::OpName::addr);
-    if (addrIdx < 0 ||
-        static_cast<unsigned>(addrIdx) >= di.inst.getNumOperands() ||
-        !di.inst.getOperand(static_cast<unsigned>(addrIdx)).isReg()) {
+    //
+    // Use `DSWrapper`: `ds_swizzle_b32` has the `DS` family TSFlag, and
+    // the wrapper folds the `getNamedOperandIdx` + bounds check into a
+    // single typed `addr()` call. We still need the raw operand index
+    // to drive `RaiseContext::readOp32`, which expects an MCInst-level
+    // index; pull it from the same wrapper.
+    mcw::DSWrapper dsw(di.inst, *ctx.mc.instrInfo);
+    const MCOperand *addrOp = dsw.addr();
+    if (addrOp == nullptr || !addrOp->isReg()) {
       hr.failure = RaiseFailure::unsupportedShape(
           di, "DS",
           "ds_swizzle_b32 missing OpName::addr VGPR operand — operand "
           "table mismatch");
       return hr;
     }
+    int addrIdx = dsw.getNamedOperandIdx(AMDGPU::OpName::addr);
     Value *src = ctx.readOp32(di, static_cast<unsigned>(addrIdx));
     Function *swiz = Intrinsic::getOrInsertDeclaration(
         &ctx.M, Intrinsic::amdgcn_ds_swizzle);

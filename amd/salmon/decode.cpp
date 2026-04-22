@@ -4,6 +4,7 @@
 #include "decoded_inst.hpp"
 #include "mc_state.hpp"
 #include "opcode_map.hpp"
+#include "salmon/amdgcn_mcinst_wrappers.h.inc"
 #include "semop.hpp"
 
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h" // AMDGPU::EXEC, VCC, SCC, ...
@@ -19,6 +20,7 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
@@ -31,6 +33,8 @@
 using namespace llvm;
 
 namespace transpiler {
+
+namespace mcw = ::transpiler::amdgcn::mcwrap;
 
 namespace {
 
@@ -291,18 +295,17 @@ void classifyImplicitDefs(DecodedInst &di, const MCInstrDesc &desc) {
 // `fullText`. gfx12+ FLAT/GLOBAL forms carry the bit in `cpol`; earlier
 // ISAs have no `cpol` operand and the flag is inherently absent
 // (`hasScaleOffset` stays false).
-void decodeScaleOffset(DecodedInst &di) {
-  const MCInst &inst = di.inst;
-  int cpolIdx =
-      AMDGPU::getNamedOperandIdx(inst.getOpcode(), AMDGPU::OpName::cpol);
-  if (cpolIdx < 0 ||
-      static_cast<unsigned>(cpolIdx) >= inst.getNumOperands())
+//
+// `cpol` lives on opcodes from many memory families (MUBUF, MTBUF, FLAT,
+// SMRD, MIMG, VIMAGE, VSAMPLE) and is absent on every other opcode, so
+// we use the base `InstWrapper`'s public `getNamedOperand` accessor
+// rather than `dyn_cast`-ing through every cpol-bearing family.
+void decodeScaleOffset(DecodedInst &di, const MCInstrInfo &mcii) {
+  mcw::InstWrapper iw(di.inst, mcii);
+  const MCOperand *cpol = iw.getNamedOperand(AMDGPU::OpName::cpol);
+  if (cpol == nullptr || !cpol->isImm())
     return;
-  const MCOperand &mop = inst.getOperand(static_cast<unsigned>(cpolIdx));
-  if (!mop.isImm())
-    return;
-  int64_t cpol = mop.getImm();
-  di.hasScaleOffset = (cpol & AMDGPU::CPol::SCAL) != 0;
+  di.hasScaleOffset = (cpol->getImm() & AMDGPU::CPol::SCAL) != 0;
 }
 
 // Decode DPP16 modifier operands (dpp_ctrl / row_mask / bank_mask /
@@ -329,30 +332,28 @@ void decodeScaleOffset(DecodedInst &di) {
 // `fi` (fetch-invalid) is not surfaced for DPP16 — `llvm.amdgcn.
 // update.dpp` does not take it. A future DPP8 lift would route
 // through `llvm.amdgcn.mov.dpp8` which also does not take `fi`.
-void decodeDppModifiers(DecodedInst &di) {
-  if (!(di.tsFlags & SIInstrFlags::DPP))
+void decodeDppModifiers(DecodedInst &di, const MCInstrInfo &mcii) {
+  // `DPPWrapper::classof` matches exactly `(TSFlags & DPP) != 0`, so
+  // the `dyn_cast` is the family-typed equivalent of the prior
+  // `tsFlags & SIInstrFlags::DPP` early-out, and tightens the rest of
+  // the function to the typed `dpp_ctrl()` / `row_mask()` / ...
+  // accessors.
+  mcw::InstWrapper iw(di.inst, mcii);
+  const mcw::DPPWrapper *dppw = dyn_cast<mcw::DPPWrapper>(&iw);
+  if (dppw == nullptr)
     return;
-  const MCInst &inst = di.inst;
-  const unsigned opc = inst.getOpcode();
   // Detect DPP8 form by presence of the `dpp8` named operand. If this
   // is a DPP8 instruction, leave `hasDpp` false — see the header
   // comment for the classifier-refusal contract.
-  if (AMDGPU::getNamedOperandIdx(opc, AMDGPU::OpName::dpp8) >= 0)
+  if (dppw->dpp8() != nullptr)
     return;
-  auto immOpt = [&](AMDGPU::OpName name) -> std::optional<int64_t> {
-    int idx = AMDGPU::getNamedOperandIdx(opc, name);
-    if (idx < 0 || static_cast<unsigned>(idx) >= inst.getNumOperands())
-      return std::nullopt;
-    const MCOperand &mop = inst.getOperand(static_cast<unsigned>(idx));
-    if (!mop.isImm())
-      return std::nullopt;
-    return mop.getImm();
-  };
-  auto ctrl = immOpt(AMDGPU::OpName::dpp_ctrl);
-  auto rowMask = immOpt(AMDGPU::OpName::row_mask);
-  auto bankMask = immOpt(AMDGPU::OpName::bank_mask);
-  auto boundCtrl = immOpt(AMDGPU::OpName::bound_ctrl);
-  if (!ctrl || !rowMask || !bankMask || !boundCtrl) {
+  const MCOperand *ctrl = dppw->dpp_ctrl();
+  const MCOperand *rowMask = dppw->row_mask();
+  const MCOperand *bankMask = dppw->bank_mask();
+  const MCOperand *boundCtrl = dppw->bound_ctrl();
+  if (ctrl == nullptr || rowMask == nullptr || bankMask == nullptr ||
+      boundCtrl == nullptr || !ctrl->isImm() || !rowMask->isImm() ||
+      !bankMask->isImm() || !boundCtrl->isImm()) {
     // MCInstrDesc declared DPP and it is not a DPP8 variant, yet the
     // MCInst operand list is missing one of the four DPP16 modifier
     // fields. This is a decoder-vs-tblgen drift situation — fail
@@ -362,7 +363,7 @@ void decodeDppModifiers(DecodedInst &di) {
     std::string msg;
     raw_string_ostream os(msg);
     os << "decodeDppModifiers: TSFlags::DPP is set for '" << di.rawMnemonic
-       << "' (opcode=" << opc
+       << "' (opcode=" << di.inst.getOpcode()
        << ") with no OpName::dpp8 operand, yet at least one of "
           "{dpp_ctrl, row_mask, bank_mask, bound_ctrl} is missing or "
           "not an immediate. LLVM likely added a new DPP variant "
@@ -371,10 +372,10 @@ void decodeDppModifiers(DecodedInst &di) {
     report_fatal_error(os.str().c_str());
   }
   di.hasDpp = true;
-  di.dppCtrl = static_cast<uint16_t>(*ctrl & 0xFFFF);
-  di.dppRowMask = static_cast<uint8_t>(*rowMask & 0xF);
-  di.dppBankMask = static_cast<uint8_t>(*bankMask & 0xF);
-  di.dppBoundCtrl = (*boundCtrl) != 0;
+  di.dppCtrl = static_cast<uint16_t>(ctrl->getImm() & 0xFFFF);
+  di.dppRowMask = static_cast<uint8_t>(rowMask->getImm() & 0xF);
+  di.dppBankMask = static_cast<uint8_t>(bankMask->getImm() & 0xF);
+  di.dppBoundCtrl = boundCtrl->getImm() != 0;
 }
 
 // Decode the 16-bit `OpName::offset` immediate of `ds_swizzle_b32`
@@ -394,18 +395,16 @@ void decodeDppModifiers(DecodedInst &di) {
 // rather than silently truncating a wider value to uint16_t (which
 // could land in either the QUAD_PERM or BITMASK_PERM safe envelope
 // and cause a silent miscompile).
-void decodeDsSwizzleImm(DecodedInst &di) {
+void decodeDsSwizzleImm(DecodedInst &di, const MCInstrInfo &mcii) {
   if (di.semOp != SemOp::DS_SWIZZLE_B32)
     return;
-  const MCInst &inst = di.inst;
-  int idx = AMDGPU::getNamedOperandIdx(inst.getOpcode(),
-                                        AMDGPU::OpName::offset);
-  if (idx < 0 || static_cast<unsigned>(idx) >= inst.getNumOperands())
+  // `ds_swizzle_b32` is unconditionally a `DS` family opcode; build a
+  // typed `DSWrapper` directly rather than `dyn_cast`-ing.
+  mcw::DSWrapper dsw(di.inst, mcii);
+  const MCOperand *off = dsw.offset();
+  if (off == nullptr || !off->isImm())
     return;
-  const MCOperand &mop = inst.getOperand(static_cast<unsigned>(idx));
-  if (!mop.isImm())
-    return;
-  int64_t raw = mop.getImm();
+  int64_t raw = off->getImm();
   if (raw < 0 || raw > 0xFFFF)
     return;
   di.dsSwizzleImm = static_cast<uint16_t>(raw);
@@ -480,9 +479,9 @@ DecodeResult decodeKernel(const MCState &mc,
     di.tsFlags = desc.TSFlags;
     di.firstSrcIdx = desc.getNumDefs();
 
-    decodeScaleOffset(di);
-    decodeDppModifiers(di);
-    decodeDsSwizzleImm(di);
+    decodeScaleOffset(di, *mc.instrInfo);
+    decodeDppModifiers(di, *mc.instrInfo);
+    decodeDsSwizzleImm(di, *mc.instrInfo);
     buildSrcMap(di, desc);
     driftCheckTiedIn(di, desc);
     driftCheckSrcN(di, desc);
