@@ -19,34 +19,78 @@ if(NOT DEFINED HOTSWAP_TRANSPILER_BUILD_TOOLS)
 endif()
 
 # --- Paths to LLVM ------------------------------------------------------------
-# We require an LLVM *build tree* (not an install tree) because the raiser uses
-# AMDGPU target-private headers (SIDefines.h, SIInstrInfo.h, AMDGPUBaseInfo.h)
-# and the TableGen-generated AMDGPUGen*.inc files.  Standard `ninja install`
-# does not copy those into the install prefix.
+# Salmon needs an LLVM *build tree* (not an install tree) because the raiser
+# uses AMDGPU target-private headers (SIDefines.h, SIInstrInfo.h,
+# AMDGPUBaseInfo.h) which transitively #include TableGen-generated
+# AMDGPUGen*.inc files. Those .inc files are produced by llvm-tblgen during
+# the LLVM build and are not copied by `ninja install`.
 #
-# Point LLVM_DIR at <llvm-build>/lib/cmake/llvm.  This is what every other
-# LLVM out-of-tree project does (clang-tools-extra, bolt, etc.).
+# We support three configurations:
 #
-# Example:
-#   cmake -DLLVM_DIR=$HOME/llvm-build/lib/cmake/llvm ..
-find_package(LLVM REQUIRED CONFIG)
+#   1. In-tree LLVM build. Salmon was added via add_subdirectory() from
+#      LLVM's own CMake (e.g. through LLVM_EXTERNAL_PROJECTS=salmon, or
+#      from a future amd/CMakeLists.txt wired into llvm/). LLVM has
+#      already populated LLVM_MAIN_SRC_DIR / LLVM_BINARY_DIR and the LLVM
+#      library targets; AddLLVM.cmake is loaded. No find_package needed.
+#
+#   2. add_subdirectory() from another out-of-tree project (comgr, ROCR,
+#      ...) that already called find_package(LLVM). Variables are
+#      populated; the find_package call below becomes a no-op.
+#
+#   3. Standalone (cmake -S amd/salmon -B build). We need find_package(LLVM)
+#      to resolve LLVM_DIR. Since salmon now lives at <llvm-project>/amd/
+#      salmon, default LLVM_DIR to the conventional <llvm-project>/build
+#      tree if the user did not pass one explicitly.
+if(TARGET LLVMSupport AND DEFINED LLVM_MAIN_SRC_DIR)
+  # Case 1. Mirror the variable name find_package(LLVM) would have set
+  # against a build tree, so the rest of this file does not have to
+  # branch.
+  set(LLVM_BUILD_MAIN_SRC_DIR "${LLVM_MAIN_SRC_DIR}")
+else()
+  # Cases 2 and 3.
+  if(NOT DEFINED LLVM_DIR OR NOT LLVM_DIR)
+    # amd/salmon/ -> amd/ -> <llvm-project>/
+    set(_salmon_default_llvm_build
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../build/lib/cmake/llvm")
+    if(EXISTS "${_salmon_default_llvm_build}/LLVMConfig.cmake")
+      get_filename_component(_salmon_default_llvm_build
+                             "${_salmon_default_llvm_build}" ABSOLUTE)
+      set(LLVM_DIR "${_salmon_default_llvm_build}" CACHE PATH
+          "Path to LLVMConfig.cmake (auto-detected from <llvm-project>/build)")
+      message(STATUS
+        "LLVM_DIR not set; defaulting to ${LLVM_DIR}")
+    endif()
+    unset(_salmon_default_llvm_build)
+  endif()
+  find_package(LLVM REQUIRED CONFIG)
+endif()
 
 if(NOT DEFINED LLVM_BUILD_MAIN_SRC_DIR OR NOT LLVM_BUILD_MAIN_SRC_DIR OR
    NOT DEFINED LLVM_BINARY_DIR OR NOT LLVM_BINARY_DIR)
   message(FATAL_ERROR
-    "hotswap-transpiler requires LLVM_DIR to point at a build tree, not an "
-    "install tree. The install tree does not expose AMDGPU target-private "
-    "headers (SIDefines.h, AMDGPUBaseInfo.h, AMDGPUGen*.inc). "
-    "Pass -DLLVM_DIR=<llvm-build>/lib/cmake/llvm.")
+    "hotswap-transpiler requires an LLVM build tree (not an install tree). "
+    "The install tree does not expose AMDGPU target-private headers "
+    "(SIDefines.h, AMDGPUBaseInfo.h, AMDGPUGen*.inc). "
+    "Pass -DLLVM_DIR=<llvm-build>/lib/cmake/llvm or build LLVM at "
+    "<llvm-project>/build so it can be auto-detected.")
 endif()
 
-message(STATUS "Using LLVM from: ${LLVM_DIR}")
+if(DEFINED LLVM_DIR AND LLVM_DIR)
+  message(STATUS "Using LLVM from: ${LLVM_DIR}")
+endif()
 message(STATUS "LLVM source tree: ${LLVM_BUILD_MAIN_SRC_DIR}")
 message(STATUS "LLVM build tree:  ${LLVM_BINARY_DIR}")
-message(STATUS "LLVM version:     ${LLVM_PACKAGE_VERSION}")
+if(DEFINED LLVM_PACKAGE_VERSION)
+  message(STATUS "LLVM version:     ${LLVM_PACKAGE_VERSION}")
+endif()
 
-list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
-include(AddLLVM)
+# In the in-tree case (1), AddLLVM is already loaded by the parent LLVM
+# build and llvm_update_compile_flags is available. Only pull it in
+# explicitly for cases (2) and (3).
+if(NOT COMMAND llvm_update_compile_flags)
+  list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+  include(AddLLVM)
+endif()
 
 # --- Include paths ------------------------------------------------------------
 include_directories(${LLVM_INCLUDE_DIRS})

@@ -65,10 +65,9 @@ Point `LLVM_DIR` at `<llvm-build>/lib/cmake/llvm` (the same convention every
 other LLVM out-of-tree project uses).
 
 ```bash
-cd projects/rocr-runtime/runtime/hsa-runtime/hotswap/transpiler
-mkdir build && cd build
-
-cmake .. -G Ninja \
+cmake -B amd/salmon/build \
+  -S amd/salmon \
+  -G Ninja \
   -DLLVM_DIR=$HOME/llvm-project/build/lib/cmake/llvm \
   -DCMAKE_CXX_COMPILER=clang++
 
@@ -77,6 +76,22 @@ ninja transpiler_tests
 
 This builds the transpiler library and the unified test binary.  No GPU or HIP
 needed — GPU tests auto-skip at runtime when HIP is unavailable.
+
+## Building the transpiler as LLVM external project
+
+Note that you'll have to explicitly provide the source directory path for salmon
+as is customary for LLVM external projects.
+
+```bash
+cmake -B build \
+  -S llvm \
+  -G Ninja \
+  -DLLVM_TARGETS_TO_BUILD="X86;AMDGPU" \
+  -DLLVM_EXTERNAL_PROJECTS=salmon \
+  -DLLVM_EXTERNAL_SALMON_SOURCE_DIR=$HOME/llvm-project/amd/salmon \
+  -DLLVM_ENABLE_PROJECTS="llvm;clang;lld" \
+  -DLLVM_USE_LINKER=lld \
+```
 
 ## Obtaining test code objects
 
