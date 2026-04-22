@@ -1,0 +1,926 @@
+# -*- Python -*-
+"""CMake-generated site configuration for llvm-lit (do not edit in the build tree).
+
+CMake configure_file(@ONLY) fills TRANSPILER_BUILD_DIR, LIT_SOURCE_DIR, tool paths,
+and LIT_FIXTURE_*_CO variables declared in lit_tests/CMakeLists.txt.
+"""
+
+import os
+
+config.transpiler_build_dir = r"@TRANSPILER_BUILD_DIR@"
+config.raise_cli = r"@LIT_TOOL_RAISE_CLI@"
+config.file_check = r"@LIT_TOOL_FILECHECK@"
+config.not_tool = r"@LIT_TOOL_NOT@"
+config.test_source_root = r"@LIT_SOURCE_DIR@"
+# Keep lit's per-test `Output/` artifacts (the generated `.script` files
+# and any tmpfiles a test writes to `%t`) out of the source tree. Without
+# this, lit defaults to co-locating `Output/` next to each .ll in the
+# source dir, which pollutes `git status` after every run.
+config.test_exec_root = os.path.dirname(os.path.abspath(__file__))
+
+# Single source of truth for fixture paths; lit.cfg.py maps tags to %<tag>_co.
+config.fixtures = {
+    "abort_gate": r"@LIT_FIXTURE_ABORT_GATE_CO@",
+    "cross_wave_warn": r"@LIT_FIXTURE_CROSS_WAVE_WARN_CO@",
+    "divergent_vgpr_ir": r"@LIT_FIXTURE_DIVERGENT_VGPR_IR_CO@",
+    "scalar_exec_writers": r"@LIT_FIXTURE_SCALAR_EXEC_WRITERS_CO@",
+    "saveexec": r"@LIT_FIXTURE_SAVEEXEC_CO@",
+    "v_cmpx_ballot": r"@LIT_FIXTURE_V_CMPX_BALLOT_CO@",
+    "global_load_ushort_saddr": r"@LIT_FIXTURE_GLOBAL_LOAD_USHORT_SADDR_CO@",
+    "ds_bpermute_b32": r"@LIT_FIXTURE_DS_BPERMUTE_B32_CO@",
+    # Wave-size obstruction classifier fixtures — one per obstruction
+    # class (Class 1..4) defined in hotswap/docs/wave-size-translation.md
+    # §6. See wave_size_obstruction.{hpp,cpp} for the classifier.
+    "c1_lane_id_leak": r"@LIT_FIXTURE_C1_LANE_ID_LEAK_CO@",
+    # c1_ttmp_wave_id_lift — canonical wave_id rescue under cross-widening.
+    # Pins the `s_bfe_u32 sDST, ttmp8, 0x50019` pattern-lift in
+    # `handle_sop2.cpp::handleSOP2` that sidesteps the backend's
+    # implicit scalarisation of the formally-scalar BFE → SGPR shape.
+    # The lift emits `(workitem.id.x >> log2(W_s)) & 0x1F` directly
+    # from the divergent-leaf intrinsic, preserving per-source-wave
+    # divergence through the destination SGPR for the benefit of
+    # every matmul / tiled-reduction kernel that keys tile offsets
+    # on `wave_id_in_workgroup`. The classifier in
+    # `wave_size_obstruction.cpp::isCanonicalWaveIdBfe` filters this
+    # exact shape out of the Class-1 refusal list so the lift actually
+    # takes effect; any *other* ttmp8 source read is still refused by
+    # TtmpWaveIdLeak. See wave-size-translation.md §5.6.2 (lift) and
+    # §6 / §7 Class-1 table (rescue vs. refuse).
+    "c1_ttmp_wave_id_lift":
+        r"@LIT_FIXTURE_C1_TTMP_WAVE_ID_LIFT_CO@",
+    # c1_wave_id_lift_scalarized — the refusal companion to
+    # c1_ttmp_wave_id_lift. Pins the three-way co-occurrence
+    # (canonical `s_bfe_u32 sDST, ttmp8, 0x50019` lift +
+    # v_writelane/v_readlane + v_wmma_*) that forces the classifier in
+    # `wave_size_obstruction.cpp::buildObstructionReport` to emit
+    # ObstructionKind::WaveIdLiftScalarized sites. The handle_sop2.cpp
+    # lift still fires for the BFE, but its per-lane divergent VGPR
+    # value is scalarised by the backend's implicit readfirstlane on
+    # entry to the cross-lane primitive's scalar source operand,
+    # collapsing source_wave[0]'s wave_id=0 and source_wave[1]'s
+    # wave_id=1 into one uniform value and miscompiling every
+    # wave_id-keyed tile-column address. WMMA forecloses the
+    # ThreadLoopProjection escape hatch (§5.2 requires the full target
+    # wave simultaneously), so no correct projection is available and
+    # the principled outcome is a loud refusal rather than a silent
+    # miscompile. Together with c1_ttmp_wave_id_lift this pair pins
+    # both terminal outcomes of the canonical wave_id-extraction
+    # pattern under cross-widening — rescue when safe, refuse when
+    # the downstream shape forecloses the lift's benefit.
+    "c1_wave_id_lift_scalarized":
+        r"@LIT_FIXTURE_C1_WAVE_ID_LIFT_SCALARIZED_CO@",
+    # writelane_divergent_rewrite / readlane_divergent_rewrite /
+    # writelane_uniform_noop — three-fixture trilogy pinning the IR-shape
+    # contract of the `rewriteCrossLaneDivergent` pass (see
+    # `rewrite_cross_lane_divergent.{hpp,cpp}` + wave-size-translation.md
+    # §5.6.3).  The pass runs by default as of the Triton-corpus
+    # graduation; the `--disable-writelane-rewrite` flag pins the
+    # pre-rewrite path for the `UNCHANGED` / `REFUSE` sibling RUN lines.
+    #
+    # * writelane_divergent_rewrite — pins the
+    #   `v_writelane_b32 -> select` rewrite. The fixture's writelane
+    #   has a divergent scalar operand (canonical `s_bfe_u32 ttmp8,
+    #   0x50019` wave_id seed), but under the symmetry rule in the
+    #   rewrite pass every writelane is rewritten regardless of
+    #   operand divergence, so the divergent seed here just keeps the
+    #   fixture tightly representative of the original Matmul128x128
+    #   failure mode. NO WMMA in the kernel so the
+    #   `WaveIdLiftScalarized` classifier does NOT refuse the lift,
+    #   giving the rewrite a chance to run and leaving a stable
+    #   anchor on the rewritten IR. Two RUN lines cover both sides
+    #   of the flag's contract:
+    #     - REWRITE (--enable-writelane-rewrite, also the default) ->
+    #       writelane gone, `mbcnt_{lo,hi}` + `select` present.
+    #     - UNCHANGED (--disable-writelane-rewrite) -> writelane
+    #       intrinsic survives verbatim; the mbcnt helper is NOT
+    #       materialised.
+    # * readlane_divergent_rewrite — pins the
+    #   `v_readlane_b32 -> ds_bpermute` rewrite. Companion to the
+    #   writelane fixture; the two together pin both halves of the
+    #   cross-lane primitive rewrite catalogue the pass acts on
+    #   today. Same two-RUN-line flag-contract shape.
+    # * writelane_uniform_noop — pins the symmetry contract with
+    #   uniform operands: under the rewrite pass's unconditional-
+    #   rewrite rule, even uniform `val` / `old` sites are rewritten
+    #   to `select`. The directory keeps the historical `_noop`
+    #   suffix for grep stability — see the fixture's .ll / .hip
+    #   header for the inverted contract and the Matmul128x128
+    #   asymmetric-rewrite triage that motivated it.
+    "writelane_divergent_rewrite":
+        r"@LIT_FIXTURE_WRITELANE_DIVERGENT_REWRITE_CO@",
+    "readlane_divergent_rewrite":
+        r"@LIT_FIXTURE_READLANE_DIVERGENT_REWRITE_CO@",
+    "writelane_uniform_noop":
+        r"@LIT_FIXTURE_WRITELANE_UNIFORM_NOOP_CO@",
+    # writelane_sgpr_forced_use — pins the forward use-chain
+    # classifier's SGPR-forced refusal path. The fixture's kernel
+    # chains writelane -> v_readfirstlane_b32, so the rewrite pass's
+    # `classifyForwardUseChain` walks from the writelane's result
+    # into `llvm.amdgcn.readfirstlane` (enumerated in
+    # `operandForcesSGPR`) and returns SGPRForced. Under
+    # `--enable-writelane-rewrite` the raiser surfaces that verdict
+    # as `crossWaveRewriteOracleDisagreement` — principled refusal
+    # instead of a best-effort rewrite that would re-introduce the
+    # scalar-source collapse. Without this fixture the classifier
+    # has a silent failure mode; with it, any regression that makes
+    # the walk accept an SGPR-forced sink (e.g. adding readfirstlane
+    # to the VGPR-safe propagator list by mistake) fails the lit
+    # suite immediately.
+    "writelane_sgpr_forced_use":
+        r"@LIT_FIXTURE_WRITELANE_SGPR_FORCED_USE_CO@",
+    "c2_permlane_swap": r"@LIT_FIXTURE_C2_PERMLANE_SWAP_CO@",
+    "c2_permlane16": r"@LIT_FIXTURE_C2_PERMLANE16_CO@",
+    # v_permlane32_swap_b32 — gfx950-only XOR-32 lane-pair swap.  Pins
+    # the ds_bpermute-based emulation in
+    # `handle_valu_cross_lane.cpp::V_PERMLANE32_SWAP_B32` that
+    # translates the gfx950 native instruction onto a gfx942 target
+    # (FeaturePermlane32Swap is gated on GFX950Insts in
+    # llvm/lib/Target/AMDGPU/AMDGPU.td; gfx940/gfx942 do not enable
+    # it).  Companion to the existing c2_permlane_swap fixture which
+    # pins the wave32 XOR-16 path; this one pins wave64 → wave64
+    # same-wave.  The 3 AITER fmha_v3_fwd kernels that were the
+    # batch_raise_test subset's entire expected-failure budget
+    # graduated on top of this handler arm — see the comment block
+    # on `batch_raise_test.cpp::BatchRaise.AiterGfx950` for the
+    # kSubsetExpectedFailures history.
+    "v_permlane32_swap_b32":
+        r"@LIT_FIXTURE_V_PERMLANE32_SWAP_B32_CO@",
+    "c2_dpp_quad_perm": r"@LIT_FIXTURE_C2_DPP_QUAD_PERM_CO@",
+    "c2_ds_swizzle": r"@LIT_FIXTURE_C2_DS_SWIZZLE_CO@",
+    "c2_ds_swizzle_unsafe": r"@LIT_FIXTURE_C2_DS_SWIZZLE_UNSAFE_CO@",
+    "c2_ds_swizzle_fft_reserved":
+        r"@LIT_FIXTURE_C2_DS_SWIZZLE_FFT_RESERVED_CO@",
+    "decoder_madmk_v_fmamk_f32":
+        r"@LIT_FIXTURE_DECODER_MADMK_V_FMAMK_F32_CO@",
+    "v_rcp_f64": r"@LIT_FIXTURE_V_RCP_F64_CO@",
+    # v_div_scale_f32 (VOP3, IEEE-conformant fdiv scaling step) —
+    # pins the three-arm operand decoder in
+    # `handle_valu.cpp::V_DIV_SCALE_F32`.  The hardware encodes the
+    # divide via operand-identity equality in the (src0, src1, src2)
+    # triple: src0 == src2 is the scale-NUMERATOR shape and src0 ==
+    # src1 is the scale-DENOMINATOR shape.  Equality is checked at
+    # the OPERAND level (register identity for VGPR/SGPR operands,
+    # immediate-bit-pattern equality for inline constants), because
+    # the Triton AMDGPU backend emits the `1.0 / x` fdiv expansion
+    # with a literal `1.0` numerator in src2 — the register-only
+    # gate in the old code fell through for both scale calls and
+    # the downstream div_fmas / div_fixup chain collapsed every
+    # such divide in the translated HSACO to a constant 1.0
+    # bit-exact (observable as `layer_norm`'s rstd reading
+    # `0x3f800000` regardless of input).  This fixture pins the
+    # post-fix canonical `(1.0, vgpr, flag)` shape for both the
+    # scale-numer and scale-denom calls, and asserts the forbidden
+    # pre-fix `(vgpr, vgpr, ...)` shape via a negative CHECK so a
+    # future regression on either arm fails the lit suite before
+    # reaching end-to-end.
+    "v_div_scale_f32_literal_numer":
+        r"@LIT_FIXTURE_V_DIV_SCALE_F32_LITERAL_NUMER_CO@",
+    "s_cmov_b32": r"@LIT_FIXTURE_S_CMOV_B32_CO@",
+    "s_mul_hi_i32": r"@LIT_FIXTURE_S_MUL_HI_I32_CO@",
+    "s_sub_nc_u64": r"@LIT_FIXTURE_S_SUB_NC_U64_CO@",
+    "s_sub_f32": r"@LIT_FIXTURE_S_SUB_F32_CO@",
+    "v_max3_u32": r"@LIT_FIXTURE_V_MAX3_U32_CO@",
+    "v_xor3_b32": r"@LIT_FIXTURE_V_XOR3_B32_CO@",
+    "v_add_nc_u16": r"@LIT_FIXTURE_V_ADD_NC_U16_CO@",
+    "v_xad_u32": r"@LIT_FIXTURE_V_XAD_U32_CO@",
+    "v_alignbit_b32": r"@LIT_FIXTURE_V_ALIGNBIT_B32_CO@",
+    # v_bfi_b32 (VOP3 gfx6+ bit-field insert) — pins the
+    # `(mask & one) | (~mask & zero)` IR shape the handler in
+    # `handle_valu.cpp` emits for the VOP3 ternary mask-and-merge
+    # opcode.  Before the handler landed, every kernel exercising
+    # this opcode (asin / atan / copysign idioms in libdevice; the
+    # compare_correctness v_bfi_b32 probe; corpus_asin_fp32) failed
+    # the raise step with `unsupported instruction: v_bfi_b32`.
+    # The handler unblocks raise; this fixture regression-pins the
+    # specific IR shape so the backend's `AMDGPUbfiPattern` will
+    # isel back to a single v_bfi_b32 on the way down.
+    "v_bfi_b32": r"@LIT_FIXTURE_V_BFI_B32_CO@",
+    "v_minmax_num_f32": r"@LIT_FIXTURE_V_MINMAX_NUM_F32_CO@",
+    # v_med3_i32 (VOP3, signed integer median-of-three) — pins the
+    # canonical `smax(smin(a, b), smin(smax(a, b), c))` lowering the
+    # handler in `handle_valu.cpp` emits via paired `llvm.smin.i32`
+    # / `llvm.smax.i32` intrinsics. The shape is the round-trip
+    # identity that the AMDGPU backend's `AMDGPUsmed3` SDAG pattern
+    # (AMDGPUInstructions.td) matches back to V_MED3_I32, so the
+    # generated assembly recovers the original instruction without
+    # codegen quality loss.
+    "v_med3_i32": r"@LIT_FIXTURE_V_MED3_I32_CO@",
+    "v_mul_u64": r"@LIT_FIXTURE_V_MUL_U64_CO@",
+    "c3_atomic_cas": r"@LIT_FIXTURE_C3_ATOMIC_CAS_CO@",
+    # s_addk_i32 (SOPK_32TIE, renamed to `s_addk_co_i32` in gfx12+
+    # assembly) — pins the correct operand-index contract for the
+    # handler in `handle_sopk.cpp`. The MC opcode has a tied-def
+    # `$src0` that the disassembler materialises as a distinct
+    # MCOperand, which the decoder's `buildSrcMap` keeps in srcMap
+    # (per the audit in `decode.cpp::kKnownTiedIn`). So for the
+    # handler, `op.src(0)` is the tied SGPR (same physical reg as
+    # sdst), and `op.src(1)` is the `$simm16` immediate — NOT the
+    # other way around. A prior revision of the handler read
+    # `op.src(0)` thinking it was the immediate; the resulting
+    # `add %dst, %dst` doubling hung Triton-compiled layer-norm
+    # (whose loop-counter increment is `s_addk_co_i32 sN, 0x400`)
+    # in all three of its reduction loops. Companion `S_MULK_I32`
+    # uses the same TableGen class and was fixed in the same
+    # commit; no corpus kernel currently exercises it so a
+    # dedicated fixture is intentionally omitted (no producer, no
+    # fixture).
+    "s_addk_i32":
+        r"@LIT_FIXTURE_S_ADDK_I32_CO@",
+    # s_mulk_i32 (SOPK_32TIE) — companion to `s_addk_i32`. Same
+    # tied-`$src0` operand-layout contract; the mul arm was fixed
+    # alongside the add arm in the same commit. No corpus kernel
+    # currently exercises `s_mulk_i32`, so this fixture is the
+    # dedicated regression guard for the mul arm specifically —
+    # without it, a future refactor that reverts just the mul arm
+    # to `op.src(0)` would pass every other test in the repo.
+    "s_mulk_i32":
+        r"@LIT_FIXTURE_S_MULK_I32_CO@",
+    # s_cmpk_eq_i32 (SOPK_SCC) — pins the operand-index contract
+    # for the compare-and-SCC SOPK family (S_CMPK_{EQ,LG,GT,GE,
+    # LT,LE}_{I,U}32). Single fixture covers all twelve variants
+    # by handler-shape identity (same `op.src(1)` read, only the
+    # icmp predicate differs).
+    #
+    # ISA gating: `s_cmpk_*_i32/u32` was dropped on gfx12, so
+    # gfx1250-source kernels cannot emit the opcode and the
+    # pre-fix bug only surfaced on gfx9xx-source kernels (AITER
+    # corpus). Fixture compiles for gfx950 and raises with
+    # `--isa=gfx950 --target-isa=gfx942`.
+    "s_cmpk_eq_i32":
+        r"@LIT_FIXTURE_S_CMPK_EQ_I32_CO@",
+    # s_atomic_dec (SMEM, gfx8+ scalar-cache wrap-decrement) — pins the
+    # `atomicrmw udec_wrap` lowering the handle_smem.cpp scalar-atomic
+    # block emits for the AITER split-k barrier counter shape.  Closes
+    # the lift gap on the 12 failing `bf16gemm_*_splitk_clean` kernels
+    # in the BatchRaise.AiterGfx950 --test-all sweep.  Compiled for
+    # gfx950 (AITER source ISA) and raised with
+    # `--target-isa=gfx942` to match the canonical race pipeline.
+    "s_atomic_dec": r"@LIT_FIXTURE_S_ATOMIC_DEC_CO@",
+    "c4_lane_dep_cmpx": r"@LIT_FIXTURE_C4_LANE_DEP_CMPX_CO@",
+    # c5_predicate_chain_tid / c5_predicate_chain_masked — the narrow-O1
+    # Class-5 "wave-size-sensitive predicate chain" classifier
+    # (transpiler/c5_predicate_chain_classifier.{hpp,cpp}) pinned by
+    # a pair of siblings that assert both sides of the soundness-
+    # not-completeness contract (hotswap/docs/wave-size-translation.md
+    # §7 + hotswap/docs/modrep-predicate-chain.md §5 narrow-O1):
+    #
+    #   * `c5_predicate_chain_tid` — REFUSAL path. Inline-asm emits
+    #     `workitem.id.x() → icmp ult K=15, tid → v_cndmask → store`
+    #     with no AND-mask on the chain. Compile-time K = 15 is
+    #     within (0, W_s-1=31], so the classifier fires. Lit expects
+    #     `cross-wave-predicate-chain` diagnostic + the
+    #     `Class 5 / WorkitemIdPredicateChain` per-site trace + a
+    #     non-zero raise_cli exit code.
+    #
+    #   * `c5_predicate_chain_masked` — NON-REFUSAL path. Same
+    #     K=15 icmp, but the chain passes through `and tid, 31`
+    #     (= W_s-1) first. The classifier's `isSourceWaveMaskAnd`
+    #     recognises the mask as collapsing replica-1 onto
+    #     `[0, W_s)` and stops walking. Lit expects raise_cli to
+    #     succeed and the IR to carry the `and i32 ..., 31` anchor.
+    #
+    # Together the pair pins that (a) the classifier refuses exactly
+    # the compile-time-K < W_s unmasked shape, (b) masking first
+    # collapses the refusal, (c) passing-baseline patterns
+    # (`icmp <tid-derived>, <dynamic kernarg>`) are not matched by
+    # either fixture's RUN line because their constant is dynamic —
+    # the compare_correctness Triton sweep is the end-to-end fence
+    # for the baseline-non-refusal contract.
+    "c5_predicate_chain_tid":
+        r"@LIT_FIXTURE_C5_PREDICATE_CHAIN_TID_CO@",
+    "c5_predicate_chain_masked":
+        r"@LIT_FIXTURE_C5_PREDICATE_CHAIN_MASKED_CO@",
+    # c5_predicate_chain_phantom_lane — third sibling pinning the
+    # WaveNative phantom-lane sub-case added after
+    # `canary_bitmatrix_composite` falsified the pre-phantom-lane
+    # WaveNative suppression. Same icmp shape as
+    # `c5_predicate_chain_tid` but with `__launch_bounds__(32)` on
+    # the HIP source so `max_flat_workgroup_size` is below the
+    # target wave64 width, triggering
+    # `classifyPredicateChain`'s `phantomLaneGuaranteed` predicate.
+    # The fixture's RUN pair pins refusal under BOTH
+    # WaveNative (default, phantom-lane-annotated) AND MODREP
+    # (unannotated — MODREP's arm doesn't consult
+    # `maxFlatWorkgroupSize`, and the fixture CHECK-NOTs the
+    # phantom-lane prefix on the MODREP run to catch any future
+    # refactor that accidentally entangles the two arms).
+    "c5_predicate_chain_phantom_lane":
+        r"@LIT_FIXTURE_C5_PREDICATE_CHAIN_PHANTOM_LANE_CO@",
+    # s_set_pc_i64 (SOP1) — four sibling fixtures, one per analysis
+    # outcome class. See setpc_analysis.cpp / handle_sop1.cpp for the
+    # Pattern A (DirectA, br) / Pattern B (IndirectB, indirectbr) /
+    # DispatchSet (multi-target indirectbr enumerated by inter-block
+    # PC-chain dataflow — the tensilelite "activation function
+    # dispatcher" pattern) / Unresolvable (refusal) lowering contract
+    # documented on SemOp::S_SET_PC_I64.
+    "s_set_pc_i64_pattern_a":
+        r"@LIT_FIXTURE_S_SET_PC_I64_PATTERN_A_CO@",
+    "s_set_pc_i64_pattern_b":
+        r"@LIT_FIXTURE_S_SET_PC_I64_PATTERN_B_CO@",
+    "s_set_pc_i64_dispatch_set":
+        r"@LIT_FIXTURE_S_SET_PC_I64_DISPATCH_SET_CO@",
+    "s_set_pc_i64_unresolvable":
+        r"@LIT_FIXTURE_S_SET_PC_I64_UNRESOLVABLE_CO@",
+    # s_swap_pc_i64 (SOP1, branch-and-link) — three sibling fixtures.
+    # Pattern A pins the chain-resolved direct lowering (swap_ret
+    # blockaddress + br label %callee). DispatchSet pins the
+    # multi-target indirect-call lowering (swap_ret blockaddress +
+    # indirectbr ptr %callee_ptr, [list]) emitted when the inter-
+    # block PC-chain dataflow enumerates a bounded set of in-kernel
+    # callees converging on the swap site (the tensilelite
+    # "activation function dispatcher" pattern). Unresolvable pins
+    # the loud refusal contract (RaiseFailure::unsupportedShape)
+    # for sites whose call target is not statically resolvable. See
+    # SemOp::S_SWAP_PC_I64 in semop.hpp and the swap branch in
+    # setpc_analysis.cpp / handle_sop1.cpp.
+    "s_swap_pc_i64_pattern_a":
+        r"@LIT_FIXTURE_S_SWAP_PC_I64_PATTERN_A_CO@",
+    "s_swap_pc_i64_dispatch_set":
+        r"@LIT_FIXTURE_S_SWAP_PC_I64_DISPATCH_SET_CO@",
+    "s_swap_pc_i64_unresolvable":
+        r"@LIT_FIXTURE_S_SWAP_PC_I64_UNRESOLVABLE_CO@",
+    # ds_load_tr8_b64 (DS) — gfx1250 64-bit transposed LDS load with
+    # 8-bit elements.  See handle_ds.cpp's `emitDsLoadTr8B64` shared
+    # lambda and the SemOp::DS_LOAD_TR8_B64 docstring in semop.hpp
+    # for the lowering contract; the fixture pins the bpermute-based
+    # emulation that gfx942 needs because neither HasGFX950Insts nor
+    # isGFX1250Plus isel patterns fire on gfx942.
+    "ds_load_tr8_b64": r"@LIT_FIXTURE_DS_LOAD_TR8_B64_CO@",
+    # ds_load_b96 / ds_store_b96 (DS) — gfx1250 96-bit (3 x i32) LDS
+    # load+store pair.  See SemOp::DS_READ_B96 / DS_WRITE_B96 in
+    # semop.hpp and the {dwords=3, loadBits=96} entry in dsClassify
+    # in handle_ds.cpp; the fixture pins the generic `<3 x i32>`
+    # vector-load/store path the handler routes both ops through.
+    "ds_load_b96": r"@LIT_FIXTURE_DS_LOAD_B96_CO@",
+    # v_cvt_scale_pk8_bf16_fp4 (VOP3 gfx1250-only scaled packed-8
+    # FP4 -> BF16 convert, V_CVT_SCALE_PK8_BF16_FP4_e64).  Pins both
+    # the same-target intrinsic-emit shape (call <8 x bfloat>
+    # @llvm.amdgcn.cvt.scale.pk8.bf16.fp4 + i128 bitcast + writeRegVec)
+    # AND the cross-target refusal path (--target-isa=gfx942 must
+    # surface a loud RaiseFailure::unsupportedShape referencing
+    # `isGFX125xOnly`).  Closes the corpus gap on scope_discovery
+    # `_matmul_ogs_NNT_bf16xbf16xmxfp4_32x256x128x1`.
+    "v_cvt_scale_pk8_bf16_fp4":
+        r"@LIT_FIXTURE_V_CVT_SCALE_PK8_BF16_FP4_CO@",
+    # v_fma_mix_f32 + v_fma_mix_f32_bf16 (VOP3P mixed-precision FMA
+    # family) — pins the shared narrow-half extraction + fpext chain
+    # for both mnemonics in one fixture.  The BF16 sibling is the
+    # gfx9.5+/gfx1250 variant that closes the kerneldex `_attn_fwd`
+    # corpus blocker (one `v_fma_mix_f32_bf16` at
+    # op_sel:[0,1,0] op_sel_hi:[1,1,0]).  Fixture runs the lift under
+    # `--target-isa=gfx942` specifically to prove the BF16 narrow
+    # half does not require a cross-target refusal — `fpext bfloat`
+    # is universally lowered on every AMDGPU target.  The handler in
+    # handle_valu_vop3p.cpp folds both variants through one
+    # `narrowTy`-parameterised switch case; this fixture is the
+    # regression guard for that shared path.
+    "v_fma_mix_f32_bf16":
+        r"@LIT_FIXTURE_V_FMA_MIX_F32_BF16_CO@",
+    # ds_load_2addr_b32 / ds_load_2addr_stride64_b32 (DS) — gfx11+
+    # two-address LDS loads.  See SemOp::DS_READ2_B32 /
+    # DS_READ2ST64_B32 in semop.hpp and the dedicated `ds2Classify`
+    # block in handle_ds.cpp; the fixture pins the correct per-offset-
+    # independent lowering (two `load i32, ptr addrspace(3)` at
+    # raw-field-scaled byte offsets) for BOTH the dword-unit variant
+    # (unit=4) and the stride-64 variant (unit=256).  Guards against
+    # regression to the pre-rewrite silent-miscompile shape that
+    # lifted every DS_READ2_B32 into a single contiguous
+    # `load <2 x i32>` at `vaddr + raw_offset0`, correct only for
+    # the (0,1) offset pair.
+    "ds_load_2addr_b32":
+        r"@LIT_FIXTURE_DS_LOAD_2ADDR_B32_CO@",
+    # s_bitcmp family (SOPC, SOPInstructions.td:1411-1414) — one
+    # fixture covers all four variants
+    # (s_bitcmp{0,1}_{b32,b64}) because the handler in
+    # handle_sopc.cpp folds them through a single
+    # {is64 || isB32}-parameterised block (only the source-operand
+    # width and the final icmp predicate differ).  Closes the
+    # kerneldex corpus blocker on scope_discovery `_attn_fwd`
+    # (one `s_bitcmp0_b32 s68, 1` that the pre-fix handler dropped
+    # on the floor, leaving the downstream SCC-dependent branch
+    # undef-driven).
+    "s_bitcmp": r"@LIT_FIXTURE_S_BITCMP_CO@",
+    # buffer_atomic_add_u32 (MUBUF/VBUFFER) — gfx11+/gfx1250 VBUFFER
+    # encoding for what the legacy MUBUF named BUFFER_ATOMIC_ADD.  The
+    # SemOp + handler already existed for the legacy MUBUF addressing
+    # forms; the gap was the missing VBUF4 entries in opcode_map.cpp
+    # for the gfx12 `_VBUFFER_*` opcodes that the disassembler emits
+    # for `buffer_atomic_add_u32`.  See VBUF4(BUFFER_ATOMIC_ADD,
+    # BUFFER_ATOMIC_ADD) in opcode_map.cpp.
+    "buffer_atomic_add_u32":
+        r"@LIT_FIXTURE_BUFFER_ATOMIC_ADD_U32_CO@",
+    # buffer_load_d16_u8 (MUBUF/VBUFFER) — gfx9+/gfx1250 D16 partial-
+    # write byte loads.  Pins both half-merge directions:
+    #   `_d16_u8`     -> (prior & 0xFFFF0000) | zext(byte, i32)
+    #   `_d16_hi_u8`  -> (prior & 0x0000FFFF) | (zext(byte, i32) << 16)
+    # See SemOp::BUFFER_LOAD_UBYTE_D16{,_HI} in semop.hpp, the d16Half
+    # branch of mubufClassify in handle_mubuf.cpp, and the matching
+    # MUBUF4 + VBUF4 entries in opcode_map.cpp.  Adding this fixture
+    # also retroactively pins the bug fix for `BUFFER_LOAD_SHORT_D16`,
+    # which previously zext'd the loaded value to i32 and overwrote
+    # the whole VGPR (silently violating `D16PreservesUnusedBits`).
+    "buffer_load_d16_u8": r"@LIT_FIXTURE_BUFFER_LOAD_D16_U8_CO@",
+    # buffer_store_no_scratch_alloca (MUBUF/VBUFFER) — regression guard
+    # for the principled BUFFER_STORE_* lowering.  See SemOp::
+    # BUFFER_STORE_DWORDX4 in semop.hpp, the `if (isStore)` block in
+    # transpiler/handle_mubuf.cpp, and the design discussion in
+    # hotswap/docs/buffer-store-lowering.md.  The fixture pins both the
+    # positive shape (`call void @llvm.amdgcn.raw.buffer.store.v4i32`)
+    # and — more importantly — the ABI invariant that fixed Triton
+    # vector-add R1: ZERO `addrspace(5)` allocas in the lifted module.
+    # Any future change that reintroduces an `addrspace(5)` alloca in
+    # a BUFFER_STORE-only kernel re-couples the kernel descriptor to
+    # `enable_private_segment` and resurrects the SIGSEGV under
+    # salmon's KD (which models only the source ABI's user-SGPR set
+    # and therefore does not request flat_scratch_init).  Sibling
+    # widths BUFFER_STORE_BYTE / SHORT / DWORD / DWORDX2 / DWORDX3
+    # share the same handler shape and are covered transitively;
+    # a per-width follow-up fixture would close the lit-coverage
+    # gap called out in the principled review.
+    "buffer_store_no_scratch_alloca":
+        r"@LIT_FIXTURE_BUFFER_STORE_NO_SCRATCH_ALLOCA_CO@",
+    # v_pk_add_f32 with inline literal source — pins the broadcast
+    # path the VOP3P handler emits for non-register operands.
+    # See the readPkSrc lambda in handle_valu_vop3p.cpp; the
+    # tensilelite swiglu kernel was previously rejected at this
+    # operand shape with "non-register source ... immediate in VOP3P
+    # not supported".  Register/register form is exercised
+    # transitively through the corpus.
+    "v_pk_add_f32_lit": r"@LIT_FIXTURE_V_PK_ADD_F32_LIT_CO@",
+    # s_bitset0_b32 (SOP1) — bit-clear with tied sdst_in.  Pins the
+    # read-modify-write shape under the AMDGPU disassembler's tied-
+    # operand collapse: the prior dst value must come from
+    # `regs.readReg32(op.dst())`, not srcMap (the disassembler emits
+    # only `(sdst, src0)` even though TableGen declares `$sdst_in`
+    # tied).  See the S_BITSET block in handle_sop1.cpp and the
+    # caveat note appended to `kKnownTiedIn` in decode.cpp.
+    "s_bitset0_b32": r"@LIT_FIXTURE_S_BITSET0_B32_CO@",
+    # s_load_b96 (SMEM) over a kernarg buffer with a `by_value`
+    # aggregate larger than 8 bytes — pins the per-dword
+    # `extractKernargDword` resolution path AND the raiser's
+    # `byValueSize > 8 && % 4 == 0` decomposition into i32 IR slots.
+    # 502 tensilelite + Triton attention kernels were blocked on
+    # this row before the fix; the fixture exists to regression-pin
+    # the (i32 %arg0, i32 %arg1, i32 %arg2, i32 %arg3, ptr %arg4)
+    # signature shape and the (%arg1, %arg2, %arg3) -> s[0:2] data
+    # flow through the SMEM kernarg branch in handle_smem.cpp.
+    "s_load_b96_kernarg":
+        r"@LIT_FIXTURE_S_LOAD_B96_KERNARG_CO@",
+    # s_load_b32 with an SGPR offset carrying the `scale_offset`
+    # (CPol::SCAL) modifier — pins the `mul i64 <offset>, 4` the
+    # SMEM handler in `handle_smem.cpp` emits to honour hardware's
+    # element-index-to-byte-offset scaling.  Before the fix, the
+    # SGPR-offset arm silently ignored `di.hasScaleOffset` and
+    # emitted a raw-byte GEP off the zero-extended offset; the
+    # resulting off-by-N* miscompile surfaced on the
+    # `s_and_saveexec_b32` compare_correctness probe as a
+    # single-block-matches, multi-block-mismatches pattern.  This
+    # fixture closes the SMEM-side gap in the `hasScaleOffset`
+    # coverage matrix (the FLAT/GLOBAL sibling paths in
+    # `flat_addr.cpp` were already scaling correctly).
+    "s_load_b32_scale_offset":
+        r"@LIT_FIXTURE_S_LOAD_B32_SCALE_OFFSET_CO@",
+    # s_lshr_b64 (SOP2 64-bit logical right shift) with an
+    # immediate shift count — the dominant corpus shape (every
+    # observed `s_lshr_b64` in the kerneldex sweep uses an
+    # immediate, typically `>> 16` for high-half pointer
+    # extraction). Pins the i32→i64 zext of the shift amount
+    # constant-folding away into a single `lshr i64 ..., 16`.
+    "s_lshr_b64_imm": r"@LIT_FIXTURE_S_LSHR_B64_IMM_CO@",
+    # s_cmp_eq_u64 (SOPC_CMP_64 unsigned 64-bit equality) — the
+    # gfx8+ 64-bit sibling of s_cmp_eq_u32. Pins the icmp eq i64
+    # SCC-writeback shape and the s_cselect_b32 chain that
+    # surfaces SCC into a normal SGPR write.
+    "s_cmp_eq_u64": r"@LIT_FIXTURE_S_CMP_EQ_U64_CO@",
+    # ds_store_b16_d16_hi (DS, gfx8+ HasD16LoadStore D16_HI
+    # partial-store family) — pins the `lshr i32 %src, 16` then
+    # `trunc i32 ... to i16` chain that surfaces the UPPER half
+    # of the source VGPR for the LDS store. By handler-shape
+    # identity this fixture also pins ds_store_b8_d16_hi (the
+    # only delta is an extra trunc-to-i8 in the same code path).
+    "ds_store_b16_d16_hi":
+        r"@LIT_FIXTURE_DS_STORE_B16_D16_HI_CO@",
+    # v_wmma_f32_16x16x32_bf16 (gfx1250 RDNA4 VOP3P opcode 0x062)
+    # lowered to gfx942 (CDNA3) via the parameterised emitWMMAtoMFMA
+    # helper. Pins the bf16-specific CDNA3 MFMA intrinsic
+    # (mfma.f32.16x16x16bf16.1k), the per-MFMA <4 x i16> bitcast,
+    # and the 2x K=16 decomposition with chained accumulator.
+    # Sibling V_WMMA_F32_16x16x32_F16 case is covered transitively
+    # by the existing Gfx1250Gpu.Matmul128x128 GPU gtest.
+    "wmma_f32_16x16x32_bf16":
+        r"@LIT_FIXTURE_WMMA_F32_16X16X32_BF16_CO@",
+    # v_wmma_f32_16x16x64_fp8_fp8 (gfx1250 RDNA4 VOP3P opcode 0x06a)
+    # lowered to gfx942 (CDNA3) via the parameterised emitWMMAtoMFMA
+    # helper with WMMAInputType::FP8_FP8.  Pins the fp8_fp8-specific
+    # CDNA3 MFMA intrinsic (mfma.f32.16x16x32.fp8.fp8), the per-MFMA
+    # `bitcast <2 x i32> ... to i64` (CDNA3's pre-fp8-type intrinsic
+    # signature), and the 2x K=32 decomposition with chained
+    # accumulator over two virtual Wave32 groups (4 MFMA calls total).
+    # Sibling FP8_BF8 / BF8_FP8 / BF8_BF8 cases are covered
+    # transitively by handler-shape identity (only the trailing
+    # intrinsic name differs); see the wmmaInputType lambda + switch
+    # in handle_valu_vop3p.cpp.
+    "wmma_f32_16x16x64_fp8_fp8":
+        r"@LIT_FIXTURE_WMMA_F32_16X16X64_FP8_FP8_CO@",
+    # v_wmma_i32_16x16x64_iu8 (gfx1250 RDNA4 VOP3P opcode 0x072)
+    # lowered to gfx942 (CDNA3) via the parameterised emitWMMAtoMFMA
+    # helper with WMMAInputType::IU8.  This is the ONLY WMMA variant
+    # with an integer accumulator — the fixture pins (a) the
+    # mfma.i32.16x16x32.i8 intrinsic dispatch (vs every other variant
+    # which dispatches to mfma.f32.*), (b) the `<4 x i32>` accumulator
+    # pack type (vs `<4 x float>` everywhere else), (c) the per-MFMA
+    # `bitcast <2 x i32> ... to i64` AB pack (shared shape with the
+    # FP8/BF8 siblings), and (d) the K=64 -> 2x K=32 chained
+    # decomposition over two virtual Wave32 groups (4 MFMA calls
+    # total, matching the FP8/BF8 shape exactly).
+    "wmma_i32_16x16x64_iu8":
+        r"@LIT_FIXTURE_WMMA_I32_16X16X64_IU8_CO@",
+    # VOPD extra sub-operations — pins three previously-unhandled
+    # shapes routed through `parseVOPDHalf` in
+    # transpiler/handle_vopd.cpp:
+    #   * v_dual_mov_b32 with an f32 inline-constant literal source
+    #     (the AMDGPU instruction printer surfaces these as their
+    #     decimal float spelling, e.g. `1.0`, rather than as the
+    #     hex bit pattern; the literal-parse fallback in the handler
+    #     maps the printed string back to its IEEE-754 32-bit
+    #     encoding via a finite enumeration mirrored from the
+    #     printer).
+    #   * v_dual_ashrrev_i32 — arithmetic right shift, reversed
+    #     operand order (sign-extension idiom in Triton kernels).
+    #   * v_dual_max_i32     — signed max via `llvm.smax.i32`.
+    # The fixture pins all three shapes in a single kernel; sibling
+    # ops added in the same pass (v_dual_min_i32, v_dual_max_u32,
+    # v_dual_min_u32, v_dual_xor_b32, v_dual_or_b32) follow the
+    # identical (s0, s1) -> intrinsic / IRBuilder dispatch pattern
+    # and are covered transitively.
+    "vopd_extra_subops":
+        r"@LIT_FIXTURE_VOPD_EXTRA_SUBOPS_CO@",
+    # VOPD `v_dual_cndmask_b32` SGPR-condition regression fence —
+    # see hotswap/docs/modrep-predicate-chain.md §6.4 (2026-04-22
+    # fix) and transpiler/handle_vopd.cpp's `v_cndmask_b32` handler.
+    #
+    # Pins the post-fix IR shape for VOPD cndmask pairs whose two
+    # halves consume DIFFERENT scalar conditions (one `sN`, one
+    # `vcc_lo`) — the pre-fix handler silently routed BOTH halves
+    # through `loadVCC`, inheriting the paired V_CMP writer's
+    # `vcc_lo` and losing the SGPR condition entirely. That was the
+    # single-bug root cause of
+    # `canary_bpermute_scan_fp32` WRONG 4/4 AND
+    # `corpus_layernorm_fp32` WRONG on N=128/256/512 — Triton's
+    # Kogge-Stone scan and LayerNorm's mean-of-squares reduction
+    # both emit exactly this dual-scalar pair, and the end-to-end
+    # numerical regression on `compare_correctness` pins the fix's
+    # correctness. This fixture pins the IR-level shape so a future
+    # refactor that re-introduces hardcoded-VCC fails here rather
+    # than only surfacing downstream as a silent scan-corpus
+    # miscompile.
+    "v_dual_cndmask_b32_sgpr_cond":
+        r"@LIT_FIXTURE_V_DUAL_CNDMASK_B32_SGPR_COND_CO@",
+    # Carry-chain SGPR-operand regression fence —
+    # transpiler/handle_valu.cpp `readCarryInI1` / `writeCarryOutI1`
+    # helpers, same SGPR-vs-VCC routing as the non-VOPD
+    # V_CNDMASK_B32 handler in handle_valu_vop3p.cpp and the VOPD
+    # cndmask fix above. Pre-2026-04-22 the six
+    # V_{ADD,SUB,SUBREV}_CO_(CI_)U32 handlers hardcoded
+    # `loadVCC` / `storeVCC` for both the carry-in (ci variants,
+    # MC src index 2) and carry-out (MC def index 1), silently
+    # ignoring the explicit scalar operand on e64/VOP3B encodings.
+    # The latent bug has zero corpus exposure today — every
+    # Triton-gfx1250 / Triton-gfx942 / AITER-TensileLite corpus
+    # kernel uses either the no-carry encoding
+    # (`v_add_nc_u32` / `v_add_nc_u64` / fused `v_lshl_add_u64`)
+    # or `vcc_lo` for the carry — but is the same class as the
+    # VOPD-cndmask silent miscompile the canary/layernorm end-to-
+    # end regressions pinned, so we close it proactively. This
+    # fixture forces the e64 form via inline asm with an arbitrary
+    # SGPR carry (`s[4:5]` / `s0` depending on the instruction) so
+    # the IR-level routing is exercised end-to-end; a regression
+    # that re-introduces hardcoded-VCC collapses the two
+    # storeVCC/loadVCC paths and fails the CHECK pattern.
+    "v_add_co_u32_sgpr_carry":
+        r"@LIT_FIXTURE_V_ADD_CO_U32_SGPR_CARRY_CO@",
+    # tensor_load_to_lds (VIMAGE TENSOR, gfx1250-only) — single
+    # `.co` fixture shared by two complementary lit tests in the
+    # `tensor_load_to_lds/` directory:
+    #   * `tensor_load_to_lds.ll` — pins the cross-target
+    #     (gfx1250 -> gfx942) loud refusal contract. The handler in
+    #     `handle_vimage.cpp` refuses via
+    #     `RaiseFailure::unsupportedShape` because the per-dim
+    #     addressing semantics of a Tensor Descriptor cannot be
+    #     reconstructed from gfx9xx primitives, and the matching LLVM
+    #     intrinsic `int_amdgcn_tensor_load_to_lds`
+    #     (IntrinsicsAMDGPU.td:4213) is itself `isGFX125xOnly`.
+    #   * `tensor_load_to_lds_same_target.ll` — pins the same-target
+    #     (gfx1250 -> gfx1250) intrinsic-emit path: marshalling of
+    #     vaddr0 / vaddr1 SGPR ranges into the `<4 x i32>` /
+    #     `<8 x i32>` D# group operands, zero-fill of the unused `_d2`
+    #     groups (2 and 3) and the always-reserved group 4, and the
+    #     `i32 0` cpol immediate, ending in a single
+    #     `llvm.amdgcn.tensor.load.to.lds` call.
+    # Sibling `tensor_store_from_lds` and the `_d4` operand-shape
+    # variant follow the identical SemOp dispatch (only the trailing
+    # intrinsic name and the operand-count branch differ); the
+    # corpus blockers we unblocked are all `_d2` loads, so we keep
+    # the fixture as a single `_d2` payload and exercise both
+    # contracts off it.
+    "tensor_load_to_lds":
+        r"@LIT_FIXTURE_TENSOR_LOAD_TO_LDS_CO@",
+    # v_wmma_f32_16x16x4_f32 (gfx1250 RDNA4 VOP3P opcode 0x05D) —
+    # single `.co` fixture shared by two complementary lit tests in
+    # the `wmma_f32_16x16x4_f32/` directory:
+    #   * `wmma_f32_16x16x4_f32.ll` — pins the cross-target
+    #     (gfx1250 -> gfx942) lift contract. The handler in
+    #     `handle_valu_vop3p.cpp` dispatches to
+    #     `emitWMMAtoMFMA_F32_16x16x4` (`wmma_lowering.cpp`),
+    #     which decomposes the Wave32 WMMA into one
+    #     `mfma_f32_16x16x4f32` call per virtual Wave32 group via
+    #     ds.bpermute lane redistribution. The K=4 MFMA matches
+    #     the WMMA's K exactly, so the per-group K-tiling that the
+    #     K=32/K=64 family does is NOT needed — exactly 2 MFMAs
+    #     total instead of 4.
+    #   * `wmma_f32_16x16x4_f32_same_target.ll` — pins the
+    #     same-target (gfx1250 -> gfx1250) intrinsic-emit shape:
+    #     the `<2 x f32>` A/B fragments and `<8 x float>`
+    #     accumulator, the canonical defaulted modifier args
+    #     (i1 false / i16 0), and the absence of any cross-K
+    #     dispatch / MFMA fallback. Same-target gating is
+    #     `ISAProfile::hasTensorOps` (FeatureGFX1250Insts) — NOT
+    #     `hasWMMA12`, since the gfx12 RDNA4-base WMMA family
+    #     (`AMDGPUWMMAIntrinsicsGFX12`, FeatureWMMA{128,256}bInsts)
+    #     does NOT include this K=4 f32 intrinsic.
+    "wmma_f32_16x16x4_f32":
+        r"@LIT_FIXTURE_WMMA_F32_16X16X4_F32_CO@",
+    # global_load_async_to_lds_b{8,32,64,128} (FLAT, gfx1250-only) —
+    # single `.co` fixture shared by two complementary lit tests in
+    # the `global_load_async_to_lds/` directory:
+    #   * `global_load_async_to_lds.ll` — pins the cross-target
+    #     (gfx1250 → gfx942) loud refusal contract. The handler in
+    #     `handle_flat.cpp` refuses via
+    #     `RaiseFailure::unsupportedShape` because gfx942 has no
+    #     asynccnt unit and the matching LLVM intrinsic family
+    #     `int_amdgcn_global_load_async_to_lds_b{8,32,64,128}`
+    #     (IntrinsicsAMDGPU.td:3939-3946) is gated by
+    #     `FeatureGFX1250Insts`. A synthesised
+    #     `global_load + ds_write` pair would alter the wave's
+    #     memory-ordering and asynccnt observable state.
+    #   * `global_load_async_to_lds_same_target.ll` — pins the
+    #     same-target (gfx1250 → gfx1250) intrinsic-emit shape:
+    #     `inttoptr i32 → ptr addrspace(3)` for the per-lane VGPR_32
+    #     LDS base, and the canonical
+    #     `call void @llvm.amdgcn.global.load.async.to.lds.b{32,64,128}`
+    #     with the FLAT `offset` and `cpol` immediates threaded
+    #     through. The b8 sibling shares the identical handler shape
+    #     (only the trailing intrinsic ID differs) and is covered
+    #     transitively by the SemOp-keyed switch arm.
+    "global_load_async_to_lds":
+        r"@LIT_FIXTURE_GLOBAL_LOAD_ASYNC_TO_LDS_CO@",
+    # global_prefetch_b8 (FLAT, gfx1250-only) — single `.co` fixture
+    # shared by two complementary lit tests in the
+    # `global_prefetch_b8/` directory:
+    #   * `global_prefetch_b8.ll` — pins the cross-target
+    #     (gfx1250 → gfx942) loud refusal contract. The handler in
+    #     `handle_flat.cpp` refuses via
+    #     `RaiseFailure::unsupportedShape` because gfx942 has no
+    #     VMEM-prefetch unit and the matching LLVM intrinsic
+    #     `int_amdgcn_global_prefetch` (IntrinsicsAMDGPU.td:3211,
+    #     LLVM PR #150466) is gated by `HasVmemPrefInsts`, only
+    #     set on gfx1250+.  The closest sibling
+    #     `int_amdgcn_s_prefetch_data` requires a UNIFORM SGPR
+    #     pointer, which we cannot prove at lift time for the
+    #     divergent VGPR address used here without a divergence
+    #     analysis pass.  Silently dropping the hint would mask
+    #     both the cross-target capability gap and the resulting
+    #     pipeline-stall regression in any software-pipelined
+    #     kernel that relied on the prefetch overlapping a prior
+    #     compute chain (the dominant Triton corpus shape).
+    #   * `global_prefetch_b8_same_target.ll` — pins the
+    #     same-target (gfx1250 → gfx1250) intrinsic-emit shape:
+    #     `add i64 saddr, zext i32 vaddr` named `saddr_vaddr`,
+    #     `inttoptr i64 ... to ptr addrspace(1)`, optional
+    #     non-inbounds `getelementptr i8, ..., i64 <offset>`
+    #     named `prefetch_addr` for the FLAT `flat_offset`
+    #     immediate, and the canonical
+    #     `call void @llvm.amdgcn.global.prefetch(ptr addrspace(1), i32)`
+    #     with the `cpol` immediate threaded through.  The call
+    #     is NOT wrapped in `ctx.emitUnderExec` because the
+    #     intrinsic carries the EXEC mask implicitly through
+    #     `IntrInaccessibleMemOrArgMemOnly` — semantically a hint
+    #     with no observable side effect on inactive lanes.
+    #
+    # Sibling `flat_prefetch_b8` (the generic-address-space
+    # sibling, lifted via `int_amdgcn_flat_prefetch`) is NOT in
+    # the corpus and so is intentionally omitted from
+    # `opcode_map.cpp` — adding it would be unprincipled (no
+    # corpus producer to validate the lifted shape against).
+    "global_prefetch_b8":
+        r"@LIT_FIXTURE_GLOBAL_PREFETCH_B8_CO@",
+    # v_wmma_scale_f32_16x16x128_f8f6f4 (gfx1250 RDNA4 VOP3PX2 opcode
+    # 0x033, ScaledWMMA family) — single `.co` fixture shared by two
+    # complementary lit tests in the
+    # `wmma_scale_f32_16x16x128_f8f6f4/` directory:
+    #   * `wmma_scale_f32_16x16x128_f8f6f4.ll` — pins the cross-target
+    #     (gfx1250 -> gfx942) loud refusal contract. The handler in
+    #     `handle_valu_vop3p.cpp` refuses via
+    #     `RaiseFailure::unsupportedShape` because gfx942 has no
+    #     scaled-WMMA hardware AND the WMMA -> MFMA decomposition for
+    #     K=128 + per-matrix-fmt selection + scale-exponent
+    #     application is not modelled in `wmma_lowering.cpp` (only
+    #     K=32 / K=64 fp16/bf16/fp8/bf8/iu8 paths exist). The matching
+    #     LLVM intrinsic
+    #     `int_amdgcn_wmma_scale_f32_16x16x128_f8f6f4`
+    #     (IntrinsicsAMDGPU.td:4138) is itself `isGFX125xOnly`, so
+    #     even an intrinsic-emit on a non-gfx1250 target would fail
+    #     at codegen — the principled lift is the loud refusal.
+    #   * `wmma_scale_f32_16x16x128_f8f6f4_same_target.ll` — pins the
+    #     same-target (gfx1250 -> gfx1250) intrinsic-emit shape:
+    #     `i32 matrix_a_fmt` / `i32 matrix_b_fmt` named-immediate
+    #     decode (`MATRIX_FMT_BF8=1`, `MATRIX_FMT_FP8=0`), per-matrix
+    #     dword count `<16 x i32>` for the f8_f8 family (suffix
+    #     `_f8_f8_w32_*` of the MC pseudo per `WMMA_F8F6F4_Profiles`),
+    #     `<8 x float>` accumulator, scale_src0 / scale_src1 read as
+    #     runtime VGPR values via `getNamedOperandIdx`, and the
+    #     canonical `i1 false` reuse defaults. 18 MC pseudos
+    #     (9 mantissa pairs `{f4,f6,f8} A × {f4,f6,f8} B` ×
+    #     `_twoaddr`/`_threeaddr`) collapse onto the single SemOp;
+    #     the f8_f8 form covered here is what the failing kerneldex
+    #     B8F8 / F8B8 ID73f0 tensilelite GEMMs emit. Same-target
+    #     gating is `ISAProfile::hasTensorOps` (FeatureGFX1250Insts)
+    #     — matching the LLVM intrinsic's actual subtarget gating.
+    "wmma_scale_f32_16x16x128_f8f6f4":
+        r"@LIT_FIXTURE_WMMA_SCALE_F32_16X16X128_F8F6F4_CO@",
+    # v_cmp_class_f32_e64 (VOPC, floating-point IEEE class predicate)
+    # — closes the parser-level gap in `parseVCmpPseudoName` in
+    # transpiler/opcode_map.cpp: `V_CMP_CLASS_F<bits>` MC pseudos
+    # were leaving the map as `SemOp::Unknown` because the pseudo
+    # name parser only recognised the predicate-compare token grammar
+    # (EQ/NE/LT/.../O), not the special `CLASS` token. The handler
+    # in `handle_valu_vcmp.cpp` already had the `if (m->isClass)`
+    # branch wired up to emit `llvm.amdgcn.class.f<bits>`; the parser
+    # fix flips on `VCmpMeta::isClass` for the matched MC pseudo and
+    # makes the existing handler-side dispatch reachable.
+    #
+    # Fixture pins both sides of the contract:
+    #   * `llvm.amdgcn.class.f32(float, i32 <mask>)` — the special-case
+    #     intrinsic-emit path (NOT a CreateFCmp); the mask immediate
+    #     (here `0x200` = +inf singleton class) threads through
+    #     verbatim.
+    #   * `llvm.amdgcn.ballot.i64` + `trunc i64 -> i32` — the wave-mask
+    #     write-back tail that the V_CMP class branch shares with the
+    #     V_CMP/V_CMPX predicate-compare branch (same `vcmp_ballot` /
+    #     `vcmp_ballot_trunc` identifiers as the v_cmpx_ballot
+    #     fixture; this is the cross-wave wave32 -> wave64 routing
+    #     contract).
+    #
+    # Sibling V_CMP_CLASS_F16 / V_CMP_CLASS_F64 share the same parser
+    # path (same `_e64` -> `CLASS_F<bits>` token grammar) and the same
+    # handler dispatch (the `m->bits == 16/32/64` switch in the
+    # `if (m->isClass)` block); they are covered transitively. The
+    # V_CMPX_CLASS_F* compare-and-EXEC siblings exercise the same
+    # parser branch and route through the V_CMPX EXEC-AND tail
+    # already pinned by v_cmpx_ballot.
+    "v_cmp_class_f32":
+        r"@LIT_FIXTURE_V_CMP_CLASS_F32_CO@",
+    # v_cmp_cndmask_sgpr — the canonical V_CMP_*_e64 -> SGPR ->
+    # V_CNDMASK_B32_e64 per-lane-predication idiom. Pins the post-
+    # fix IR shape in handle_valu_vop3p.cpp's V_CNDMASK_B32 arm:
+    # the SGPR-source branch routes through the WaveProjection's
+    # `extractLaneBitFromWaveMask` (mask widen if needed -> lshr by
+    # lane_id -> and 1 -> icmp ne 0) instead of the pre-fix
+    # `icmp ne <sgpr>, 0` that folded the entire wave mask into one
+    # uniform `i1`, making every lane of a data-dependent compare
+    # take the same side of the select. This is the shape every
+    # libdevice math branch (asin / acos / atan / log / exp) and
+    # every Triton epilogue that survives an e64 compare across a
+    # basic-block boundary reaches for — pre-fix, asin ran at ~87%
+    # wrong lanes; the fix drops it to ~44% (residual = the
+    # separate wave-native V_CMP -> SGPR narrow-write-and-replicate
+    # path documented in handle_valu_vcmp.cpp and left to the
+    # obstruction classifier follow-up). See the
+    # tools/compare_correctness regression probe of the same name
+    # for the runtime evidence.
+    "v_cmp_cndmask_sgpr":
+        r"@LIT_FIXTURE_V_CMP_CNDMASK_SGPR_CO@",
+    # v_cmp_cndmask_sgpr_scalar_clobber — fallback-path companion
+    # to `v_cmp_cndmask_sgpr`. Same V_CMP -> SGPR -> V_CNDMASK
+    # idiom, but with a scalar `s_mov_b32 s4, imm` sandwiched
+    # between the V_CMP producer and the V_CNDMASK consumer. The
+    # scalar write invalidates the per-lane i1 shadow entry in
+    # `RaiseContext::lastSgprWaveMaskI1` via the
+    # `AllocaRegFile::onSgprWritten` hook, forcing the consumer
+    # back through the `extractLaneBitFromWaveMask` fallback.
+    # Pins the "any interference defeats the cache" invariant
+    # from hotswap/docs/sgpr-wave-mask-translation.md section 3.1
+    # (I3): future regressions that forget to invalidate the
+    # shadow on scalar SGPR writes would fail this fixture (the
+    # `mask_lane_idx` / ... extract chain goes absent and the
+    # direct-i1 path takes over, producing a stale `%vcmpf`
+    # reference to a compare whose wave-mask meaning was
+    # overwritten by the sentinel).
+    "v_cmp_cndmask_sgpr_scalar_clobber":
+        r"@LIT_FIXTURE_V_CMP_CNDMASK_SGPR_SCALAR_CLOBBER_CO@",
+    # v_cmp_cndmask_sgpr_class — class-compare companion to
+    # `v_cmp_cndmask_sgpr`. Same direct-i1 shadow path contract
+    # but the producer is `v_cmp_class_f32_e64` (FP IEEE-class
+    # predicate). Guards against re-introducing the
+    # `!m->isClass` scope gate that was removed from
+    # `handle_valu_vcmp.cpp`: with the gate, class-compare
+    # kernels under wave32 -> wave64 cross-widening fall back
+    # to the lossy extract for no correctness reason. This
+    # fixture fails if the gate returns (the `select i1
+    # %vclass, ...` shape disappears and the `mask_lane_*`
+    # extract chain reappears).
+    "v_cmp_cndmask_sgpr_class":
+        r"@LIT_FIXTURE_V_CMP_CNDMASK_SGPR_CLASS_CO@",
+    # v_pk_int_b16 (VOP3P packed `<2 x i16>` int family) — pins both
+    # opcodes the kerneldex corpus exercises today (V_PK_LSHLREV_B16
+    # + V_PK_ADD_U16) under one fixture so the shared
+    # operand-decode + write-back shape is asserted from a single
+    # producer. Unblocks the scope_discovery `_upcast_from_mxfp`
+    # kernel in the kerneldex sweep.
+    #
+    # Fixture pins:
+    #   * Shared decode shape — `bitcast i32 -> <2 x i16>` + the
+    #     extract/insert round-trip the handler emits to encode the
+    #     op_sel / op_sel_hi default (lo->lo, hi->hi) permutation.
+    #   * V_PK_LSHLREV_B16: explicit `and <2 x i16> ..., <i16 15,
+    #     i16 15>` shift-count mask matching the AMDGPU clshl_rev_16
+    #     hardware clamp, then `shl <2 x i16>` in the reversed
+    #     (value, count) operand order.
+    #   * V_PK_ADD_U16: `add <2 x i16>`.
+    #   * Write-back via `bitcast <2 x i16> -> i32` named
+    #     `pk_i16_pack`.
+    #
+    # Sibling V_PK_LSHRREV_B16 / V_PK_ASHRREV_I16 / V_PK_SUB_U16 /
+    # V_PK_MUL_LO_U16 / V_PK_MAX_{I,U}16 / V_PK_MIN_{I,U}16 share
+    # this exact handler shape (one extra inner-switch case + IR
+    # opcode dispatch); they are intentionally NOT pre-enumerated
+    # in opcode_map.cpp / semop.hpp because the kerneldex corpus
+    # has zero producers for them today (no fallback / design what
+    # the corpus exercises).
+    "v_pk_int_b16":
+        r"@LIT_FIXTURE_V_PK_INT_B16_CO@",
+    # s_load_u16 (SMEM, gfx12+ scalar narrow-load family) — pins the
+    # Position-α permissive-lift contract for the only shape the
+    # kerneldex corpus exercises today: an unsigned half-word scalar
+    # load through a runtime-materialised SGPR-pair base pointer
+    # (NOT the kernarg pointer — that case is routed to a separate
+    # defensive refusal branch that does not fire on any corpus
+    # kernel, see handle_smem.cpp's narrow-load block).
+    #
+    # Fixture pins:
+    #   * `load i16, ptr addrspace(1) %{{.*}}, align 2` — half-word
+    #     element type + global address space + explicit hardware-
+    #     mandated 2-byte alignment.
+    #   * `zext i16 %smem_load_h to i32` — zero-extension for the
+    #     unsigned variant. (The I16 sibling routes through the same
+    #     handler block with `sext` via the `isSigned` switch.)
+    #
+    # Two negative assertions guard the two adjacent mis-lifts:
+    #   * `load i32 ..., align 4` — catches a dword-widen-and-mask
+    #     lift that would risk OOB reads past a 2-byte allocation.
+    #   * `sext i16 %smem_load_h to i32` — catches an accidental
+    #     sign-extension that would corrupt every high-bit-set u16
+    #     silently.
+    #
+    # Sibling SemOps (S_LOAD_U8 / S_LOAD_I8 / S_LOAD_I16) share the
+    # shared handler body and differ only in element type, Align
+    # immediate, and zext/sext finale; they are covered transitively
+    # and are NOT given their own fixtures because no corpus producer
+    # exercises them today (no fixture without a producer).
+    "s_load_u16":
+        r"@LIT_FIXTURE_S_LOAD_U16_CO@",
+    # scratch_refusal — pins the loud-failure contract of the early
+    # `SIInstrFlags::FlatScratch` branch in handle_flat.cpp for the
+    # entire FLAT scratch family (`scratch_load_*`, `scratch_store_*`,
+    # `scratch_atomic_*`). One fixture covers every scratch SemOp
+    # that would reach the dispatcher because the refusal is keyed on
+    # the encoding-level TSFlags bit (set by the `IsFlatScratch` field
+    # on every `FLAT_Scratch_*_Pseudo` in FLATInstructions.td), not on
+    # a per-mnemonic SemOp — the regression guard is
+    # format-symmetric.
+    #
+    # Fixture pins:
+    #   * raise_cli exits non-zero (refusal is contractual, not a
+    #     silent miscompile).
+    #   * Handler diagnostic names the mnemonic (`scratch_store_b32`),
+    #     the ABI anchor (`flat_scratch_init`), and back-links to the
+    #     `buffer_store_no_scratch_alloca` regression guard that
+    #     forbids the `addrspace(5)` alloca path a naïve lift would
+    #     take.
+    #   * raise_cli failure line pins the same anchors on the
+    #     outer-tool side (kernel name, mnemonic, `[FLAT]` format,
+    #     `flat_scratch_init`, `buffer_store_no_scratch_alloca`).
+    #
+    # This is a REFUSAL fixture — there is no companion
+    # `_same_target.ll`, because the refusal applies on every
+    # (isa, target-isa) combination until the Salmon ABI is
+    # extended to request `flat_scratch_init` in the generated KD.
+    # When that lands, this fixture becomes the single anchor point
+    # for a corresponding positive-emit fixture.
+    "scratch_refusal":
+        r"@LIT_FIXTURE_SCRATCH_REFUSAL_CO@",
+}
+
+lit_config.load_config(
+    config, os.path.join(r"@LIT_SOURCE_DIR@", "lit.cfg.py")
+)
