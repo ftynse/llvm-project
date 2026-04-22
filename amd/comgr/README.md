@@ -8,7 +8,7 @@ The Comgr API is compatible with C99 and C++.
 Building the Code Object Manager
 --------------------------------
 
-Comgr depends on [LLVM](https://github.com/ROCm/llvm-project) and
+Comgr depends on the [AMD fork of LLVM](https://github.com/ROCm/llvm-project) and
 [AMDDeviceLibs](https://github.com/ROCm/llvm-project/tree/amd-staging/amd/device-libs).
 One way to make these visible to the Comgr build process is by setting the
 `CMAKE_PREFIX_PATH` to include either the build directory or install prefix of
@@ -18,33 +18,38 @@ branch. LLVM should be built with at least
 `LLVM_ENABLE_PROJECTS='llvm;clang;lld'` and
 `LLVM_TARGETS_TO_BUILD='AMDGPU;X86'`.
 
-An example `bash` session to build Comgr on Linux using GNUMakefiles is:
+An example `bash` session to build Comgr on Linux using Ninja is:
 
-    $ LLVM_PROJECT=~/llvm-project/build
-    $ DEVICE_LIBS=~/llvm-project/amd/device-libs/build
-    $ mkdir -p "$LLVM_PROJECT"
-    $ cd "$LLVM_PROJECT"
+    $ export LLVM_PROJECT=$HOME/llvm-project/
+    $ export DEVICE_LIBS=$HOME/llvm-project/amd/device-libs/
+    $ export COMGR=$HOME/llvm-project/amd/comgr
+
     $ cmake \
+        -B $LLVM_PROJECT/build \
+        -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DLLVM_ENABLE_PROJECTS="llvm;clang;lld" \
         -DLLVM_TARGETS_TO_BUILD="AMDGPU;X86" \
-        ../llvm
-    $ make
-    $ mkdir -p "$DEVICE_LIBS"
-    $ cd "$DEVICE_LIBS"
+        -DLLVM_USE_LINKER=lld \
+        -DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-unknown-linux-gnu \
+        -S $LLVM_PROJECT/llvm
+    $ cmake --build $LLVM_PROJECT/build
+    
     $ cmake \
+        -B $DEVICE_LIBS/build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_PREFIX_PATH="$LLVM_PROJECT" \
-        ..
-    $ make
-    $ cd ~/llvm-project/amd/comgr
-    $ mkdir -p build; cd build;
+        -DCMAKE_PREFIX_PATH="$LLVM_PROJECT/build" \
+        -S $DEVICE_LIBS
+    $ cmake --build $DEVICE_LIBS/build
+
     $ cmake \
+        -B $COMGR/build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_PREFIX_PATH="$LLVM_PROJECT;$DEVICE_LIBS" \
-        ..
-    $ make
-    $ make test
+        -DCMAKE_PREFIX_PATH="$LLVM_PROJECT/build;$DEVICE_LIBS/build/lib/cmake" \
+        -DCOMGR_ENABLE_SALMON=On \
+        -S $COMGR
+    $ cmake --build $COMGR/build
+    $ cmake --build $COMGR/build --target test
 
 The equivalent on Windows in `cmd.exe` using Visual Studio project files is:
 
