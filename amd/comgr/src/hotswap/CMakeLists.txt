@@ -26,6 +26,8 @@ add_definitions(${LLVM_DEFINITIONS})
 # or a separate static archive.
 add_library(hotswap-transpiler OBJECT
   raiser.cpp
+  code-object-utils.cpp
+  hotswap-error.cpp
 )
 
 if(NOT TARGET hotswap::transpiler)
@@ -40,14 +42,26 @@ llvm_update_compile_flags(hotswap-transpiler)
 
 set_target_properties(hotswap-transpiler PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Public include root so consumers can `#include "hotswap/raiser.hpp"`.
+# Public include root so consumers can `#include "hotswap/raiser.h"`; the
+# `..` also puts comgr's own src/ on the search path so code-object-utils.cpp
+# can reach comgr-metadata.h / comgr-symbol.h.
 target_include_directories(hotswap-transpiler PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
 )
 
+# comgr-metadata.h -> comgr.h -> amd_comgr.h, which is configured into comgr's
+# binary include/ directory (src/hotswap -> src -> comgr binary root).
+get_filename_component(HOTSWAP_COMGR_BINARY_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/../.." ABSOLUTE)
+target_include_directories(hotswap-transpiler PRIVATE
+  "${HOTSWAP_COMGR_BINARY_DIR}/include"
+)
+
 target_link_libraries(hotswap-transpiler
   PUBLIC
+    LLVMBinaryFormat
     LLVMCore
+    LLVMObject
     LLVMSupport
     LLVMTargetParser
 )

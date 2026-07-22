@@ -20,6 +20,8 @@ if config.comgr_spirv_translator_available:
     config.available_features.add("comgr-has-spirv-translator")
 if config.comgr_amdgpu_target_available:
     config.available_features.add("comgr-has-amdgpu-target")
+if config.comgr_hotswap_transpile_available:
+    config.available_features.add("comgr-has-hotswap-transpile")
 
 if platform.system() == "Windows":
     config.available_features.add("system-windows")
@@ -59,3 +61,4 @@ config.substitutions.append(("%FileCheck", _fwd(config.llvm_tools_dir, "FileChec
 config.substitutions.append(
     ("%amd-llvm-spirv", _fwd(config.llvm_tools_dir, "amd-llvm-spirv"))
 )
+config.substitutions.append(("%raise_cli", _fwd(config.comgr_obj_dir, "raise_cli")))

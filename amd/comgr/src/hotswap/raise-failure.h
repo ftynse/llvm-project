@@ -22,7 +22,6 @@ enum class RaiseFailureReason : uint16_t {
   BadInput,
 };
 
-
 struct RaiseFailure {
   RaiseFailureReason Reason = RaiseFailureReason::None;
   // Optional human-readable context.

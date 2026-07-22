@@ -16,6 +16,8 @@ else()
 endif()
 canonicalize_cmake_boolean(COMGR_AMDGPU_TARGET_AVAILABLE)
 
+canonicalize_cmake_boolean(COMGR_ENABLE_HOTSWAP_TRANSPILE)
+
 find_program(LLVM_LIT_PATH
   NAMES llvm-lit llvm-lit.py llvm-lit.cmd
   PATHS "${LLVM_TOOLS_BINARY_DIR}/../../bin" "${LLVM_TOOLS_BINARY_DIR}"
@@ -64,5 +66,29 @@ add_comgr_lit_binary(lookup-code-object c)
 add_comgr_lit_binary(hotswap-rewrite c)
 add_comgr_lit_binary(parse-isa-name c)
 add_comgr_lit_binary(name-expression-map c)
+
+# The hotswap raiser driver used by the hotswap-raise lit tests. It links the
+# hotswap-transpiler OBJECT library directly (not the amd_comgr C API) and
+# recompiles the two comgr helpers whose internal COMGR:: symbols the shared
+# library hides (getElfIsaName / getMetadataRoot / lookupSymbolByName), letting
+# --gc-sections drop the rest of those translation units.
+if(COMGR_ENABLE_HOTSWAP_TRANSPILE)
+  add_executable(raise_cli
+    comgr-sources/raise_cli.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/comgr-metadata.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/comgr-symbol.cpp)
+  llvm_update_compile_flags(raise_cli)
+  # LLVM is built without RTTI/exceptions; match it so cl::opt<std::string>'s
+  # OptionValue typeinfo isn't referenced against the -fno-rtti Support library.
+  target_compile_options(raise_cli PRIVATE
+    -fno-rtti -fno-exceptions -ffunction-sections -fdata-sections)
+  target_include_directories(raise_cli PRIVATE
+    ${LLVM_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${CMAKE_CURRENT_BINARY_DIR}/../include)
+  target_link_libraries(raise_cli PRIVATE hotswap::transpiler)
+  target_link_options(raise_cli PRIVATE -Wl,--gc-sections)
+  add_dependencies(test-lit raise_cli)
+endif()
 
 add_dependencies(check-comgr test-lit)
