@@ -19,6 +19,13 @@ namespace metadata {
 
 amd_comgr_status_t getMetadataRoot(DataObject *DataP, DataMeta *MetaP);
 
+// Buffer-friendly overloads for callers that hold raw code-object bytes
+// without a `DataObject` (e.g. the hotswap transpiler running over an HSACO
+// buffer), so they reach the same note walker / ISA-string formatter without
+// the public C `amd_comgr_create_data` ceremony.
+amd_comgr_status_t getMetadataRoot(llvm::MemoryBufferRef MB, DataMeta *MetaP);
+amd_comgr_status_t getElfIsaName(llvm::MemoryBufferRef MB, std::string &IsaName);
+
 size_t getIsaCount();
 
 const char *getIsaName(size_t Index);
