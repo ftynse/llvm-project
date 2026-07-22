@@ -69,24 +69,38 @@ add_comgr_lit_binary(name-expression-map c)
 
 # The hotswap raiser driver used by the hotswap-raise lit tests. It links the
 # hotswap-transpiler OBJECT library directly (not the amd_comgr C API) and
-# recompiles the two comgr helpers whose internal COMGR:: symbols the shared
-# library hides (getElfIsaName / getMetadataRoot / lookupSymbolByName), letting
-# --gc-sections drop the rest of those translation units.
+# recompiles the comgr helpers whose internal COMGR:: symbols the shared
+# library hides (getElfIsaName / getMetadataRoot / lookupSymbolByName, plus the
+# LLVM target-init/parseTargetIdentifier helpers from standalone-init.cpp so the
+# driver registers AMDGPU into its own LLVM rather than the .so's hidden copy),
+# letting --gc-sections drop the rest of those translation units.
 if(COMGR_ENABLE_HOTSWAP_TRANSPILE)
   add_executable(raise_cli
     comgr-sources/raise_cli.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/comgr-metadata.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/comgr-symbol.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/comgr-symbol.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../test-shared/standalone-init.cpp)
   llvm_update_compile_flags(raise_cli)
   # LLVM is built without RTTI/exceptions; match it so cl::opt<std::string>'s
   # OptionValue typeinfo isn't referenced against the -fno-rtti Support library.
   target_compile_options(raise_cli PRIVATE
     -fno-rtti -fno-exceptions -ffunction-sections -fdata-sections)
+  # raise_cli.cpp includes the decoder headers, which reach AMDGPU
+  # target-private headers (Utils/AMDGPUBaseInfo.h and the generated .inc).
   target_include_directories(raise_cli PRIVATE
     ${LLVM_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
-    ${CMAKE_CURRENT_BINARY_DIR}/../include)
-  target_link_libraries(raise_cli PRIVATE hotswap::transpiler)
+    ${CMAKE_CURRENT_BINARY_DIR}/../include
+    "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
+    "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/Utils"
+    "${LLVM_BINARY_DIR}/lib/Target/AMDGPU")
+  # AMDGPU target registration (LLVMInitializeAMDGPU* in standalone-init.cpp)
+  # lives in the CodeGen / AsmParser components, beyond the decode-only set the
+  # object library pulls in.
+  target_link_libraries(raise_cli PRIVATE
+    hotswap::transpiler
+    LLVMAMDGPUCodeGen
+    LLVMAMDGPUAsmParser)
   target_link_options(raise_cli PRIVATE -Wl,--gc-sections)
   add_dependencies(test-lit raise_cli)
 endif()

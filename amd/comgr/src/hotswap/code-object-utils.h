@@ -29,6 +29,35 @@
 
 namespace COMGR::hotswap {
 
+/// Raw bytes of the AMDGPU `.text` section, as returned by
+/// `extractTextSection`. The byte buffer is owned by the `TextSection` --
+/// the underlying ELF MemoryBuffer is not borrowed across the call.
+struct TextSection {
+  /// Raw `.text` bytes, indexed by text-relative decoded instruction offsets.
+  llvm::SmallVector<uint8_t> Bytes;
+  /// Runtime address of `.text`; PC-relative instructions use this source
+  /// code-object address domain.
+  uint64_t Address = 0;
+
+  /// Allocated source sections whose bytes may be read through PC-relative
+  /// SMEM.
+  struct ImageSection {
+    /// Section bytes, indexed by source code-object address minus `Address`.
+    llvm::SmallVector<uint8_t> Bytes;
+    /// Runtime address of this source code-object section.
+    uint64_t Address = 0;
+  };
+  /// Minimal source image used for literal-table materialisation.
+  llvm::SmallVector<ImageSection> ImageSections;
+};
+
+/// Resolved text-section extent for a kernel symbol. `Offset` is relative to
+/// `.text`; `Size` bounds decoding to the selected symbol's byte range.
+struct KernelSymbolExtent {
+  uint64_t Offset = 0;
+  uint64_t Size = 0;
+};
+
 /// One entry of the kernel argument table extracted from the AMDGPU MsgPack
 /// notes. Mirrors the AMDHSA `.args` schema; absent fields stay at the
 /// constructor defaults below.
@@ -120,6 +149,11 @@ struct KernelMeta {
   }
 };
 
+/// Extract the `.text` section bytes from `ElfData`. Returns a
+/// `HotswapError` when the ELF parses but has no `.text` section;
+/// forwards `llvm::object` parse errors unchanged.
+llvm::Expected<TextSection> extractTextSection(llvm::MemoryBufferRef ElfData);
+
 /// List the kernel names declared in the AMDGPU MsgPack notes embedded in
 /// `ElfData`. Returns a `HotswapError` when no AMDGPU metadata note is
 /// present.
@@ -133,6 +167,24 @@ listKernelNames(llvm::MemoryBufferRef ElfData);
 /// is unreachable, with `HasKernelDescriptor == false`.
 llvm::Expected<KernelMeta> extractKernelMeta(llvm::MemoryBufferRef ElfData,
                                              llvm::StringRef KernelName);
+
+/// Resolve the byte offset and byte extent for `KernelName` within `.text`.
+/// When the ELF symbol size is missing or zero, the extent is bounded by the
+/// next metadata kernel symbol where possible, so helper/device functions
+/// between kernels stay inside the selected kernel's extent.
+llvm::Expected<KernelSymbolExtent>
+findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
+                       llvm::StringRef KernelName);
+
+/// List the byte extent of every function symbol in `.text`, sorted by
+/// ascending offset. Offsets are `.text`-relative (symbol address minus the
+/// section base), matching `findKernelSymbolExtent`. Zero-sized symbols are
+/// bounded by the next function symbol (or the end of `.text`). This lets the
+/// raiser resolve a call/branch target that lands in a *different* function
+/// (an outlined device helper) to that callee's extent so it can be decoded
+/// and lifted alongside the caller.
+llvm::Expected<llvm::SmallVector<KernelSymbolExtent>>
+listTextFunctionExtents(llvm::MemoryBufferRef ElfData);
 
 } // namespace COMGR::hotswap
 

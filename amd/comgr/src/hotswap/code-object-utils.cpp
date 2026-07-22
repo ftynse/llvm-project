@@ -198,6 +198,35 @@ void forEachKernelNode(llvm::msgpack::Document &Doc, Fn &&CB) {
 
 } // namespace
 
+llvm::Expected<TextSection> extractTextSection(llvm::MemoryBufferRef ElfData) {
+  llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> ObjOrErr =
+      llvm::object::ObjectFile::createELFObjectFile(ElfData);
+  if (!ObjOrErr)
+    return ObjOrErr.takeError();
+  TextSection Result;
+  for (const llvm::object::SectionRef &Sec : (*ObjOrErr)->sections()) {
+    llvm::Expected<llvm::StringRef> NameOrErr = Sec.getName();
+    if (!NameOrErr)
+      return NameOrErr.takeError();
+    if (*NameOrErr == ".rodata" || *NameOrErr == ".text") {
+      llvm::Expected<llvm::StringRef> ContentsOrErr = Sec.getContents();
+      if (!ContentsOrErr)
+        return ContentsOrErr.takeError();
+      TextSection::ImageSection Image;
+      Image.Bytes.assign(ContentsOrErr->begin(), ContentsOrErr->end());
+      Image.Address = Sec.getAddress();
+      Result.ImageSections.push_back(std::move(Image));
+      if (*NameOrErr == ".text") {
+        Result.Bytes.assign(ContentsOrErr->begin(), ContentsOrErr->end());
+        Result.Address = Sec.getAddress();
+      }
+    }
+  }
+  if (!Result.Bytes.empty())
+    return Result;
+  return makeHotswapError("extractTextSection: .text section not found in ELF");
+}
+
 llvm::Expected<llvm::SmallVector<std::string>>
 listKernelNames(llvm::MemoryBufferRef ElfData) {
   COMGR::DataMeta Meta;
@@ -310,6 +339,188 @@ llvm::Expected<KernelMeta> extractKernelMeta(llvm::MemoryBufferRef ElfData,
   // rather than silently assuming a hardcoded SGPR layout.
   populateKernelDescriptorFields(*ObjOrErr->get(), Meta);
   return Meta;
+}
+
+llvm::Expected<KernelSymbolExtent>
+findKernelSymbolExtent(llvm::MemoryBufferRef ElfData,
+                       llvm::StringRef KernelName) {
+  llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> ObjOrErr =
+      llvm::object::ObjectFile::createELFObjectFile(ElfData);
+  if (!ObjOrErr)
+    return ObjOrErr.takeError();
+
+  uint64_t TextBase = UINT64_MAX;
+  uint64_t TextEnd = 0;
+  std::optional<llvm::object::SectionRef> TextSec;
+  for (const llvm::object::SectionRef &Sec : (*ObjOrErr)->sections()) {
+    llvm::Expected<llvm::StringRef> NameOrErr = Sec.getName();
+    if (!NameOrErr)
+      return NameOrErr.takeError();
+    if (*NameOrErr != ".text")
+      continue;
+    TextSec = Sec;
+    TextBase = Sec.getAddress();
+    if (Sec.getSize() > UINT64_MAX - TextBase)
+      return makeHotswapError("findKernelSymbolExtent: kernel '" + KernelName +
+                              "' .text address range overflows");
+    TextEnd = TextBase + Sec.getSize();
+    break;
+  }
+  if (TextBase == UINT64_MAX)
+    return makeHotswapError("findKernelSymbolExtent: kernel '" + KernelName +
+                            "' no .text section in ELF");
+
+  llvm::Expected<llvm::object::SymbolRef> SymOrErr =
+      COMGR::lookupSymbolByName(**ObjOrErr, KernelName);
+  if (!SymOrErr)
+    return SymOrErr.takeError();
+
+  llvm::Expected<llvm::object::section_iterator> SymSecOrErr =
+      SymOrErr->getSection();
+  if (!SymSecOrErr)
+    return SymSecOrErr.takeError();
+
+  if (*SymSecOrErr == (*ObjOrErr)->section_end() || **SymSecOrErr != *TextSec)
+    return makeHotswapError("findKernelSymbolExtent: symbol '" + KernelName +
+                            "' is not in .text");
+  llvm::Expected<uint64_t> AddrOrErr = SymOrErr->getAddress();
+  if (!AddrOrErr)
+    return AddrOrErr.takeError();
+
+  if (*AddrOrErr < TextBase || *AddrOrErr >= TextEnd)
+    return makeHotswapError("findKernelSymbolExtent: symbol '" + KernelName +
+                            "' address is outside .text");
+
+  KernelSymbolExtent Extent;
+  Extent.Offset = *AddrOrErr - TextBase;
+
+  uint64_t SymbolSize = llvm::object::ELFSymbolRef(*SymOrErr).getSize();
+  if (SymbolSize != 0) {
+    if (SymbolSize > TextEnd - *AddrOrErr)
+      return makeHotswapError("findKernelSymbolExtent: symbol '" + KernelName +
+                              "' size extends past .text");
+    Extent.Size = SymbolSize;
+    return Extent;
+  }
+
+  llvm::Expected<llvm::SmallVector<std::string>> KernelNamesOrErr =
+      listKernelNames(ElfData);
+  if (!KernelNamesOrErr) {
+    return makeHotswapError(
+        "findKernelSymbolExtent: symbol '" + KernelName +
+        "' has zero size and metadata kernel list is unavailable: " +
+        llvm::toString(KernelNamesOrErr.takeError()));
+  }
+
+  // Some code objects leave st_size at zero. In that case, bound by the next
+  // metadata kernel symbol rather than the next STT_FUNC: device/helper
+  // functions between kernels belong to the selected kernel's reachable body.
+  uint64_t NextAddr = TextEnd;
+  for (llvm::StringRef OtherKernelName : *KernelNamesOrErr) {
+    if (OtherKernelName == KernelName)
+      continue;
+    llvm::Expected<llvm::object::SymbolRef> OtherSymOrErr =
+        COMGR::lookupSymbolByName(**ObjOrErr, OtherKernelName);
+    if (!OtherSymOrErr) {
+      return makeHotswapError(
+          "findKernelSymbolExtent: failed to resolve metadata kernel symbol '" +
+          OtherKernelName + "' while bounding zero-sized symbol '" +
+          KernelName + "': " + llvm::toString(OtherSymOrErr.takeError()));
+    }
+    llvm::Expected<llvm::object::section_iterator> SecItOrErr =
+        OtherSymOrErr->getSection();
+    if (!SecItOrErr)
+      return SecItOrErr.takeError();
+    if (*SecItOrErr == (*ObjOrErr)->section_end() || **SecItOrErr != *TextSec)
+      continue;
+    llvm::Expected<uint64_t> OtherAddrOrErr = OtherSymOrErr->getAddress();
+    if (!OtherAddrOrErr)
+      return OtherAddrOrErr.takeError();
+    uint64_t OtherAddr = *OtherAddrOrErr;
+    if (OtherAddr > *AddrOrErr && OtherAddr < NextAddr)
+      NextAddr = OtherAddr;
+  }
+  Extent.Size = NextAddr - *AddrOrErr;
+  return Extent;
+}
+
+llvm::Expected<llvm::SmallVector<KernelSymbolExtent>>
+listTextFunctionExtents(llvm::MemoryBufferRef ElfData) {
+  llvm::Expected<std::unique_ptr<llvm::object::ObjectFile>> ObjOrErr =
+      llvm::object::ObjectFile::createELFObjectFile(ElfData);
+  if (!ObjOrErr)
+    return ObjOrErr.takeError();
+
+  uint64_t TextBase = UINT64_MAX;
+  uint64_t TextEnd = 0;
+  std::optional<llvm::object::SectionRef> TextSec;
+  for (const llvm::object::SectionRef &Sec : (*ObjOrErr)->sections()) {
+    llvm::Expected<llvm::StringRef> NameOrErr = Sec.getName();
+    if (!NameOrErr)
+      return NameOrErr.takeError();
+    if (*NameOrErr != ".text")
+      continue;
+    TextSec = Sec;
+    TextBase = Sec.getAddress();
+    TextEnd = TextBase + Sec.getSize();
+    break;
+  }
+  if (TextBase == UINT64_MAX)
+    return makeHotswapError("listTextFunctionExtents: .text section not found");
+
+  // Collect every function symbol's address in .text, then convert to
+  // text-relative extents. Zero-sized symbols are bounded by the next symbol
+  // address (or .text end) so an outlined helper without a recorded size still
+  // gets a usable extent.
+  struct FuncSym {
+    uint64_t Addr;
+    uint64_t Size;
+  };
+  llvm::SmallVector<FuncSym> Funcs;
+  for (const llvm::object::SymbolRef &Sym : (*ObjOrErr)->symbols()) {
+    llvm::Expected<llvm::object::SymbolRef::Type> TypeOrErr = Sym.getType();
+    if (!TypeOrErr)
+      return TypeOrErr.takeError();
+    if (*TypeOrErr != llvm::object::SymbolRef::ST_Function)
+      continue;
+    llvm::Expected<llvm::object::section_iterator> SecItOrErr =
+        Sym.getSection();
+    if (!SecItOrErr)
+      return SecItOrErr.takeError();
+    if (*SecItOrErr == (*ObjOrErr)->section_end() || **SecItOrErr != *TextSec)
+      continue;
+    llvm::Expected<uint64_t> AddrOrErr = Sym.getAddress();
+    if (!AddrOrErr)
+      return AddrOrErr.takeError();
+    if (*AddrOrErr < TextBase || *AddrOrErr >= TextEnd)
+      continue;
+    Funcs.push_back({*AddrOrErr, llvm::object::ELFSymbolRef(Sym).getSize()});
+  }
+
+  llvm::sort(Funcs, [](const FuncSym &A, const FuncSym &B) {
+    return A.Addr < B.Addr;
+  });
+
+  llvm::SmallVector<KernelSymbolExtent> Extents;
+  Extents.reserve(Funcs.size());
+  for (const FuncSym &F : Funcs) {
+    uint64_t Size = F.Size;
+    if (Size == 0) {
+      // No recorded size: bound the symbol by the next one with a strictly
+      // greater address (Funcs is sorted ascending), or the end of .text.
+      const FuncSym *Next =
+          llvm::upper_bound(Funcs, F.Addr, [](uint64_t Addr, const FuncSym &S) {
+            return Addr < S.Addr;
+          });
+      uint64_t NextAddr = Next == Funcs.end() ? TextEnd : Next->Addr;
+      Size = NextAddr - F.Addr;
+    }
+    KernelSymbolExtent Extent;
+    Extent.Offset = F.Addr - TextBase;
+    Extent.Size = Size;
+    Extents.push_back(Extent);
+  }
+  return Extents;
 }
 
 } // namespace COMGR::hotswap

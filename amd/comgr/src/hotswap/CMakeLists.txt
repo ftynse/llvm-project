@@ -28,6 +28,10 @@ add_library(hotswap-transpiler OBJECT
   raiser.cpp
   code-object-utils.cpp
   hotswap-error.cpp
+  mc-state.cpp
+  canonical-op.cpp
+  opcode-map.cpp
+  decode.cpp
 )
 
 if(NOT TARGET hotswap::transpiler)
@@ -49,18 +53,32 @@ target_include_directories(hotswap-transpiler PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
 )
 
-# comgr-metadata.h -> comgr.h -> amd_comgr.h, which is configured into comgr's
-# binary include/ directory (src/hotswap -> src -> comgr binary root).
+# The decoder consumes AMDGPU target-private headers (SIDefines.h,
+# SIInstrInfo.h, AMDGPUBaseInfo.h), which transitively include the
+# TableGen-generated AMDGPUGen*.inc files. Those live in the LLVM source and
+# build trees and are not exposed by an install tree.
+# comgr-metadata.h -> comgr.h -> amd_comgr.h, configured into comgr's binary
+# include/ directory (src/hotswap -> src -> comgr binary root).
 get_filename_component(HOTSWAP_COMGR_BINARY_DIR
   "${CMAKE_CURRENT_BINARY_DIR}/../.." ABSOLUTE)
 target_include_directories(hotswap-transpiler PRIVATE
+  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU"
+  "${LLVM_BUILD_MAIN_SRC_DIR}/lib/Target/AMDGPU/Utils"
+  "${LLVM_BINARY_DIR}/lib/Target/AMDGPU"
   "${HOTSWAP_COMGR_BINARY_DIR}/include"
 )
 
 target_link_libraries(hotswap-transpiler
   PUBLIC
+    LLVMAMDGPUDesc
+    LLVMAMDGPUDisassembler
+    LLVMAMDGPUInfo
+    LLVMAMDGPUUtils
     LLVMBinaryFormat
     LLVMCore
+    LLVMMC
+    LLVMMCDisassembler
+    LLVMMCParser
     LLVMObject
     LLVMSupport
     LLVMTargetParser

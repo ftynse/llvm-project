@@ -2,13 +2,18 @@
 
 ; RUN: %llvm-mc -triple=amdgcn-amd-amdhsa -filetype=obj -mcpu=gfx942 %s -o %t.o
 ; RUN: %ld.lld -shared %t.o -o %t.hsaco
-; RUN: %raise_cli %t.hsaco --emit-ir | %FileCheck %s
-;
+
 ; The raiser loads the code object, reads the kernel metadata and descriptor,
 ; and emits the kernel function shell. Instruction lifting is not wired up yet,
 ; so the body is a placeholder ret.
+; RUN: %raise_cli %t.hsaco --emit-ir | %FileCheck %s
 ; CHECK-LABEL: define amdgpu_kernel void @mov_endpgm_kernel(
 ; CHECK: ret void
+
+; --dump-decoded runs the MC stack, opcode map, and decoder over the kernel's
+; .text and lists each instruction's canonical op and disassembly. The DECODE
+; lines below sit next to the instructions they match.
+; RUN: %raise_cli %t.hsaco --dump-decoded | %FileCheck %s --check-prefix=DECODE
 
 ; An unrecognised source ISA is refused with a diagnostic, not a crash.
 ; RUN: not %raise_cli %t.hsaco --isa=gfxbogus --emit-ir 2>&1 \
@@ -22,7 +27,9 @@
 	.p2align	8
 	.type	mov_endpgm_kernel,@function
 mov_endpgm_kernel:
+; DECODE: S_MOV_B32{{.+}}s_mov_b32 s0, 0
 	s_mov_b32 s0, 0
+; DECODE: S_ENDPGM{{.+}}s_endpgm
 	s_endpgm
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0

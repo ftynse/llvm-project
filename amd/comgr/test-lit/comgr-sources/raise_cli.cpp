@@ -26,7 +26,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "comgr-metadata.h"
+#include "comgr.h"
+#include "hotswap/canonical-op.h"
 #include "hotswap/code-object-utils.h"
+#include "hotswap/decode.h"
+#include "hotswap/mc-state.h"
+#include "hotswap/opcode-map.h"
 #include "hotswap/raiser.h"
 
 // raiser.h forward-declares llvm::LLVMContext and llvm::Module, but
@@ -79,6 +84,37 @@ cl::opt<std::string>
               cl::desc("Dump raised LLVM IR on stdout. Bare or absent = all "
                        "kernels; =<k>[,<k>...] selects a subset in order."));
 
+cl::opt<std::string> DumpDecodedOpt(
+    "dump-decoded", cl::ValueOptional, cl::value_desc("kernel[,kernel...]"),
+    cl::desc("Dump the decoded instruction listing (offset, canonical op, "
+             "disassembly) instead of raising. Same kernel selection as "
+             "--emit-ir."));
+
+// Resolve a --emit-ir / --dump-decoded value into the ordered list of kernels
+// to process: empty selects every kernel in code-object order; a comma list
+// selects the named kernels in order. Reports unknown names on stderr.
+bool resolveTargets(llvm::StringRef Requested,
+                    llvm::ArrayRef<std::string> KernelNames,
+                    llvm::StringRef CoPath,
+                    llvm::SmallVectorImpl<std::string> &Targets) {
+  if (Requested.empty()) {
+    Targets.assign(KernelNames.begin(), KernelNames.end());
+    return true;
+  }
+  llvm::SmallVector<llvm::StringRef> RequestedNames;
+  Requested.split(RequestedNames, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (llvm::StringRef Name : RequestedNames) {
+    Name = Name.trim();
+    if (!llvm::is_contained(KernelNames, Name)) {
+      llvm::errs() << "raise_cli: kernel '" << Name << "' not found in "
+                   << CoPath << "\n";
+      return false;
+    }
+    Targets.push_back(Name.str());
+  }
+  return true;
+}
+
 } // namespace
 
 int main(int Argc, char **Argv) {
@@ -124,30 +160,81 @@ int main(int Argc, char **Argv) {
     return 2;
   }
 
-  // Resolve the kernels to emit: a bare or absent --emit-ir selects every
-  // kernel in code-object order; --emit-ir=<k>[,<k>...] selects the listed
-  // kernels in the given order.
+  bool DumpDecoded = DumpDecodedOpt.getNumOccurrences() > 0;
   llvm::SmallVector<std::string> Targets;
-  std::string Requested = EmitIrOpt;
-  if (Requested.empty()) {
-    Targets.assign(KernelNames.begin(), KernelNames.end());
-  } else {
-    llvm::SmallVector<llvm::StringRef> RequestedNames;
-    llvm::StringRef(Requested).split(RequestedNames, ',', /*MaxSplit=*/-1,
-                                     /*KeepEmpty=*/false);
-    for (llvm::StringRef Name : RequestedNames) {
-      Name = Name.trim();
-      if (!llvm::is_contained(KernelNames, Name)) {
-        llvm::errs() << "raise_cli: kernel '" << Name << "' not found in "
-                     << CoPathOpt << "\n";
-        return 2;
-      }
-      Targets.push_back(Name.str());
-    }
-  }
+  if (!resolveTargets(DumpDecoded ? llvm::StringRef(DumpDecodedOpt)
+                                  : llvm::StringRef(EmitIrOpt),
+                      KernelNames, CoPathOpt, Targets))
+    return 2;
 
   bool Multi = Targets.size() > 1;
   bool AnyFailed = false;
+
+  // --dump-decoded path: decode each kernel's .text to a canonical instruction
+  // listing without raising. Exercises the MC stack, opcode map, and decoder.
+  if (DumpDecoded) {
+    COMGR::ensureLLVMInitialized();
+    llvm::Expected<COMGR::hotswap::TextSection> TextOrErr =
+        COMGR::hotswap::extractTextSection(CoData);
+    if (!TextOrErr) {
+      llvm::errs() << "raise_cli: could not extract .text from " << CoPathOpt
+                   << ": " << llvm::toString(TextOrErr.takeError()) << "\n";
+      return 2;
+    }
+    COMGR::hotswap::TextSection Text = std::move(*TextOrErr);
+
+    // initMCState wants the bare AMDGPU processor (e.g. gfx942); the --isa /
+    // ELF form may be a full target id like "amdgcn-amd-amdhsa--gfx942:xnack-".
+    llvm::StringRef Cpu = llvm::StringRef(Isa).rsplit('-').second;
+    if (Cpu.empty())
+      Cpu = Isa;
+    Cpu = Cpu.take_until([](char C) { return C == ':'; });
+
+    llvm::Expected<COMGR::hotswap::MCState> McOrErr =
+        COMGR::hotswap::initMCState(Cpu);
+    if (!McOrErr) {
+      llvm::errs() << "raise_cli: MC init failed for ISA '" << Isa
+                   << "': " << llvm::toString(McOrErr.takeError()) << "\n";
+      return 2;
+    }
+    COMGR::hotswap::MCState Mc = std::move(*McOrErr);
+    COMGR::hotswap::OpcodeMap OpcMap;
+    OpcMap.build(*Mc.InstrInfo);
+
+    for (const std::string &Target : Targets) {
+      llvm::Expected<COMGR::hotswap::KernelSymbolExtent> ExtentOrErr =
+          COMGR::hotswap::findKernelSymbolExtent(CoData, Target);
+      if (!ExtentOrErr) {
+        llvm::errs() << "raise_cli: kernel '" << Target
+                     << "' extent: " << llvm::toString(ExtentOrErr.takeError())
+                     << "\n";
+        AnyFailed = true;
+        continue;
+      }
+      llvm::Expected<COMGR::hotswap::DecodeResult> DecodedOrErr =
+          COMGR::hotswap::decodeKernel(Mc, OpcMap, Text.Bytes,
+                                       ExtentOrErr->Offset,
+                                       ExtentOrErr->Offset + ExtentOrErr->Size);
+      if (!DecodedOrErr) {
+        llvm::errs() << "raise_cli: kernel '" << Target
+                     << "' decode: " << llvm::toString(DecodedOrErr.takeError())
+                     << "\n";
+        AnyFailed = true;
+        continue;
+      }
+      if (Multi)
+        llvm::outs() << "; === raise_cli kernel: " << Target << " ===\n";
+      for (const COMGR::hotswap::DecodedInst &Di : DecodedOrErr->Insts) {
+        llvm::outs() << "0x";
+        llvm::outs().write_hex(Di.Offset);
+        llvm::outs() << "  " << COMGR::hotswap::canonicalOpName(Di.CanonOp)
+                     << "  " << Di.FullText << "\n";
+      }
+    }
+    return AnyFailed ? 1 : 0;
+  }
+
+  // --emit-ir path (default): raise each kernel and dump its LLVM IR.
   for (const std::string &Target : Targets) {
     llvm::Expected<COMGR::hotswap::KernelMeta> MetaOrErr =
         COMGR::hotswap::extractKernelMeta(CoData, Target);
