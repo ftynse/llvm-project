@@ -170,19 +170,21 @@ int main(int Argc, char **Argv) {
   bool Multi = Targets.size() > 1;
   bool AnyFailed = false;
 
+  // Both modes work over the kernel .text and need AMDGPU registered into this
+  // binary's own LLVM (see standalone-init.cpp for why not the amd_comgr copy).
+  COMGR::ensureLLVMInitialized();
+  llvm::Expected<COMGR::hotswap::TextSection> TextOrErr =
+      COMGR::hotswap::extractTextSection(CoData);
+  if (!TextOrErr) {
+    llvm::errs() << "raise_cli: could not extract .text from " << CoPathOpt
+                 << ": " << llvm::toString(TextOrErr.takeError()) << "\n";
+    return 2;
+  }
+  COMGR::hotswap::TextSection Text = std::move(*TextOrErr);
+
   // --dump-decoded path: decode each kernel's .text to a canonical instruction
   // listing without raising. Exercises the MC stack, opcode map, and decoder.
   if (DumpDecoded) {
-    COMGR::ensureLLVMInitialized();
-    llvm::Expected<COMGR::hotswap::TextSection> TextOrErr =
-        COMGR::hotswap::extractTextSection(CoData);
-    if (!TextOrErr) {
-      llvm::errs() << "raise_cli: could not extract .text from " << CoPathOpt
-                   << ": " << llvm::toString(TextOrErr.takeError()) << "\n";
-      return 2;
-    }
-    COMGR::hotswap::TextSection Text = std::move(*TextOrErr);
-
     // initMCState wants the bare AMDGPU processor (e.g. gfx942); the --isa /
     // ELF form may be a full target id like "amdgcn-amd-amdhsa--gfx942:xnack-".
     llvm::StringRef Cpu = llvm::StringRef(Isa).rsplit('-').second;
@@ -247,14 +249,34 @@ int main(int Argc, char **Argv) {
     }
     COMGR::hotswap::KernelMeta Meta = std::move(*MetaOrErr);
 
-    COMGR::hotswap::RaiseResult Raised =
-        COMGR::hotswap::raiseToIR(Isa, Target, Meta);
-    if (!Raised.Success) {
+    llvm::Expected<COMGR::hotswap::KernelSymbolExtent> ExtentOrErr =
+        COMGR::hotswap::findKernelSymbolExtent(CoData, Target);
+    if (!ExtentOrErr) {
       llvm::errs() << "raise_cli: kernel '" << Target
-                   << "' failed to raise: " << Raised.Failure.Detail << "\n";
+                   << "' extent: " << llvm::toString(ExtentOrErr.takeError())
+                   << "\n";
       AnyFailed = true;
       continue;
     }
+
+    llvm::Expected<COMGR::hotswap::RaiseResult> RaisedOrErr =
+        COMGR::hotswap::raiseToIR(Text.Bytes, Isa, Target, Meta,
+                                  ExtentOrErr->Offset, ExtentOrErr->Size,
+                                  /*CompilationTargetIsa=*/"",
+                                  /*EnableWritelaneRewrite=*/true,
+                                  /*EnableWaveNative=*/true,
+                                  /*AssumeHipGlobalOffsetZero=*/false,
+                                  /*ForceModrepDoubled=*/false, Text.Address,
+                                  Text.ImageSections);
+    if (!RaisedOrErr) {
+      // The raiser only returns a module on success, so a failure has no
+      // partial IR to dump; report the structured reason on stderr.
+      llvm::errs() << "raise_cli: kernel '" << Target << "' failed to raise: "
+                   << llvm::toString(RaisedOrErr.takeError()) << "\n";
+      AnyFailed = true;
+      continue;
+    }
+    COMGR::hotswap::RaiseResult Raised = std::move(*RaisedOrErr);
 
     if (Multi)
       llvm::outs() << "; === raise_cli kernel: " << Target << " ===\n";

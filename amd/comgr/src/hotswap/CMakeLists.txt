@@ -30,8 +30,18 @@ add_library(hotswap-transpiler OBJECT
   hotswap-error.cpp
   mc-state.cpp
   canonical-op.cpp
+  canonical-op-attrs.cpp
   opcode-map.cpp
   decode.cpp
+  raise-failure.cpp
+  reg-file.cpp
+  wave-projection.cpp
+  raise-context.cpp
+  user-sgpr-layout.cpp
+  kernarg-layout.cpp
+  source-hidden-args.cpp
+  handle-sopp.cpp
+  handle-sop1.cpp
 )
 
 if(NOT TARGET hotswap::transpiler)
@@ -70,16 +80,24 @@ target_include_directories(hotswap-transpiler PRIVATE
 
 target_link_libraries(hotswap-transpiler
   PUBLIC
+    LLVMAMDGPUAsmParser
+    LLVMAMDGPUCodeGen
     LLVMAMDGPUDesc
     LLVMAMDGPUDisassembler
     LLVMAMDGPUInfo
     LLVMAMDGPUUtils
+    LLVMAnalysis
+    LLVMAsmPrinter
     LLVMBinaryFormat
+    LLVMCodeGen
     LLVMCore
     LLVMMC
     LLVMMCDisassembler
     LLVMMCParser
     LLVMObject
+    LLVMPasses
     LLVMSupport
+    LLVMTarget
     LLVMTargetParser
+    LLVMTransformUtils
 )
