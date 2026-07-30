@@ -26,6 +26,7 @@ add_definitions(${LLVM_DEFINITIONS})
 # or a separate static archive.
 add_library(hotswap-raiser OBJECT
   raiser.cpp
+  wave-projection.cpp
 )
 
 if(NOT TARGET hotswap::raiser)
@@ -45,9 +46,45 @@ target_include_directories(hotswap-raiser PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../..>
 )
 
+# The wave projection lowers decoded instructions to IR, so it links the
+# decoder OBJECT library and inherits its curated LLVM component set (the
+# AMDGPU MC/Desc/Utils libraries the projection's register queries need).
 target_link_libraries(hotswap-raiser
   PUBLIC
+    hotswap::decoder
     LLVMCore
     LLVMSupport
     LLVMTargetParser
+)
+
+# The wave projection consumes AMDGPU target-private headers (AMDGPUMCTargetDesc.h,
+# AMDGPUBaseInfo.h), which transitively include the TableGen-generated
+# AMDGPUGen*.inc files. Those live in the LLVM source and build trees and are not
+# exposed by an install tree. Locate the source across the layouts comgr builds
+# in: an in-tree monorepo build exposes it as LLVM_MAIN_SRC_DIR, a
+# find_package(LLVM) consumer as LLVM_BUILD_MAIN_SRC_DIR, and the ROCm superbuild
+# sets neither but keeps amd/comgr next to llvm/ under a shared root. Probe for
+# the header rather than trust one variable, so a wrong or empty root fails the
+# configure loudly.
+set(HOTSWAP_AMDGPU_SRC_DIR "")
+foreach(HotswapLLVMRoot
+    "${LLVM_MAIN_SRC_DIR}"
+    "${LLVM_BUILD_MAIN_SRC_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../llvm")
+  if(HotswapLLVMRoot AND
+     EXISTS "${HotswapLLVMRoot}/lib/Target/AMDGPU/SIDefines.h")
+    get_filename_component(HOTSWAP_AMDGPU_SRC_DIR
+      "${HotswapLLVMRoot}/lib/Target/AMDGPU" ABSOLUTE)
+    break()
+  endif()
+endforeach()
+if(NOT HOTSWAP_AMDGPU_SRC_DIR)
+  message(FATAL_ERROR
+    "hotswap-raiser: cannot find the LLVM AMDGPU target sources "
+    "(SIDefines.h); set LLVM_MAIN_SRC_DIR to the llvm source directory.")
+endif()
+target_include_directories(hotswap-raiser PRIVATE
+  "${HOTSWAP_AMDGPU_SRC_DIR}"
+  "${HOTSWAP_AMDGPU_SRC_DIR}/Utils"
+  "${LLVM_BINARY_DIR}/lib/Target/AMDGPU"
 )

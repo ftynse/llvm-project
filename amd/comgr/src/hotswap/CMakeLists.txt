@@ -8,13 +8,14 @@
 # common/ is mostly header-only (kernel-meta.h); hotswap::common compiles the
 # one out-of-line HotswapError::ID symbol the loader and decoder share.
 add_subdirectory(rewriter)
-add_subdirectory(raiser)
 
-# The loader and decoder consume AMDGPU target-private headers an
-# install-tree-only build does not expose, so the transpile-path libraries are
-# entered only when the transpile entry point is on.
+# The raiser, loader, and decoder consume AMDGPU target-private headers an
+# install-tree-only build does not expose, and the raiser links the decoder, so
+# the transpile-path libraries are entered only when the transpile entry point
+# is on.
 if(COMGR_ENABLE_HOTSWAP_TRANSPILE)
   add_subdirectory(common)
   add_subdirectory(loader)
   add_subdirectory(decoder)
+  add_subdirectory(raiser)
 endif()
