@@ -64,6 +64,8 @@ add_library(hotswap-decoder OBJECT
   mc-state.cpp
   amdgpu-formats.cpp
   canonical-op.cpp
+  opcode-map.cpp
+  decode.cpp
 )
 
 if(NOT TARGET hotswap::decoder)
