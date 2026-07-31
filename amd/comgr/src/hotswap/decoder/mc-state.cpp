@@ -7,11 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "mc-state.h"
+#include "comgr.h"
 #include "hotswap/common/hotswap-error.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/TargetSelect.h"
+#include "llvm/TargetParser/AMDGPUTargetParser.h"
 
 using namespace llvm;
 
@@ -19,44 +20,55 @@ namespace COMGR::hotswap {
 
 Expected<std::unique_ptr<MCSubtargetInfo>>
 buildSubtargetInfo(const Target &Target, StringRef Isa) {
+  // createMCSubtargetInfo does not reject an unknown CPU: it diagnoses to
+  // stderr and returns a featureless default, and building the AMDGPU
+  // disassembler from that trips reportFatalUsageError and aborts the host.
+  // Reject the bare processor name up front so malformed ISA input returns an
+  // error instead.
+  if (AMDGPU::parseArchAMDGCN(Isa) == AMDGPU::GK_NONE) {
+    return makeHotswapError("buildSubtargetInfo: unknown AMDGPU processor '" +
+                            Isa + "'");
+  }
   Triple Triple(kAMDGPUTriple);
   std::unique_ptr<MCSubtargetInfo> STI(
       Target.createMCSubtargetInfo(Triple, Isa, ""));
-  if (!STI)
+  if (!STI) {
     return makeHotswapError("buildSubtargetInfo: failed to create "
                             "MCSubtargetInfo for ISA '" +
                             Isa + "'");
+  }
   return STI;
 }
 
 llvm::Expected<MCState> initMCState(StringRef TargetIsa) {
-  LLVMInitializeAMDGPUTargetInfo();
-  LLVMInitializeAMDGPUTarget();
-  LLVMInitializeAMDGPUTargetMC();
-  LLVMInitializeAMDGPUDisassembler();
-  LLVMInitializeAMDGPUAsmParser();
-  LLVMInitializeAMDGPUAsmPrinter();
+  // Registering the AMDGPU target mutates the process-global TargetRegistry,
+  // which is not thread-safe. Reuse COMGR's shared one-time initializer (mutex
+  // plus run-once guard) rather than re-registering on every call.
+  COMGR::ensureLLVMInitialized();
 
   Triple Triple(kAMDGPUTriple);
   std::string LookupError;
   MCState State;
   State.Target = TargetRegistry::lookupTarget(Triple, LookupError);
-  if (!State.Target)
+  if (!State.Target) {
     return makeHotswapError("initMCState: Target lookup for '" + kAMDGPUTriple +
                             "' failed: " + LookupError);
+  }
 
   State.InstrInfo.reset(State.Target->createMCInstrInfo());
   State.RegInfo.reset(State.Target->createMCRegInfo(Triple));
   Expected<std::unique_ptr<MCSubtargetInfo>> STIOrErr =
       buildSubtargetInfo(*State.Target, TargetIsa);
-  if (!STIOrErr)
+  if (!STIOrErr) {
     return STIOrErr.takeError();
+  }
 
   State.SubtargetInfo = std::move(*STIOrErr);
   State.AsmInfo.reset(
       State.Target->createMCAsmInfo(*State.RegInfo, Triple, MCTargetOptions()));
-  if (!State.AsmInfo)
+  if (!State.AsmInfo) {
     return makeHotswapError("initMCState: createMCAsmInfo returned null");
+  }
 
   State.Ctx = std::make_unique<MCContext>(Triple, *State.AsmInfo,
                                           *State.RegInfo, *State.SubtargetInfo);
@@ -79,13 +91,15 @@ llvm::Expected<MCState> initMCState(StringRef TargetIsa) {
   State.Ctx->initInlineSourceManager();
   State.Disasm.reset(
       State.Target->createMCDisassembler(*State.SubtargetInfo, *State.Ctx));
-  if (!State.Disasm)
+  if (!State.Disasm) {
     return makeHotswapError("initMCState: createMCDisassembler returned null");
+  }
 
   State.Printer.reset(State.Target->createMCInstPrinter(
       Triple, 0, *State.AsmInfo, *State.InstrInfo, *State.RegInfo));
-  if (!State.Printer)
+  if (!State.Printer) {
     return makeHotswapError("initMCState: createMCInstPrinter returned null");
+  }
 
   State.Printer->setPrintImmHex(true);
 
@@ -109,9 +123,11 @@ std::string printInst(const MCState &State, const MCInst &Inst) {
 }
 
 StringRef stripEncoding(StringRef Mnemonic) {
-  for (StringRef Suffix : {"_e32", "_e64", "_vi"})
-    if (Mnemonic.ends_with(Suffix))
+  for (StringRef Suffix : {"_e32", "_e64", "_vi"}) {
+    if (Mnemonic.ends_with(Suffix)) {
       return Mnemonic.drop_back(Suffix.size());
+    }
+  }
   return Mnemonic;
 }
 
