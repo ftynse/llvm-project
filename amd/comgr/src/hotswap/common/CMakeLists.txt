@@ -32,6 +32,17 @@ if(NOT TARGET hotswap::common)
 endif()
 
 llvm_update_compile_flags(hotswap-common)
+# llvm_update_compile_flags does not reliably carry LLVM's -fno-rtti to a
+# standalone find_package(LLVM) consumer, and HotswapError derives from
+# llvm::ErrorInfo. Mirror LLVM_ENABLE_RTTI explicitly so we do not emit typeinfo
+# an RTTI-off LLVM cannot resolve at link time.
+if(NOT LLVM_ENABLE_RTTI)
+  if(MSVC)
+    target_compile_options(hotswap-common PRIVATE /GR-)
+  else()
+    target_compile_options(hotswap-common PRIVATE -fno-rtti)
+  endif()
+endif()
 set_target_properties(hotswap-common PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Public include root (src/) so consumers can `#include "hotswap/common/...".
