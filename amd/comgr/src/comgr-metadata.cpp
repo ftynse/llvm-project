@@ -28,8 +28,10 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include <cstddef>
 #include <iostream>
+#include <optional>
 
 using namespace llvm;
 using namespace llvm::object;
@@ -41,18 +43,21 @@ template <typename ELFT> using Elf_Note = typename ELFT::Note;
 
 namespace {
 Expected<std::unique_ptr<ELFObjectFileBase>>
-getELFObjectFileBase(DataObject *DataP) {
-  std::unique_ptr<MemoryBuffer> Buf =
-      MemoryBuffer::getMemBuffer(StringRef(DataP->Data, DataP->Size));
-
+getELFObjectFileBase(MemoryBufferRef MB) {
   Expected<std::unique_ptr<ObjectFile>> ObjOrErr =
-      ObjectFile::createELFObjectFile(*Buf);
+      ObjectFile::createELFObjectFile(MB);
 
   if (auto Err = ObjOrErr.takeError()) {
     return std::move(Err);
   }
 
   return unique_dyn_cast<ELFObjectFileBase>(std::move(*ObjOrErr));
+}
+
+Expected<std::unique_ptr<ELFObjectFileBase>>
+getELFObjectFileBase(DataObject *DataP) {
+  return getELFObjectFileBase(
+      MemoryBufferRef(StringRef(DataP->Data, DataP->Size), ""));
 }
 
 // PAL currently produces MsgPack metadata in a note with this ID.
@@ -187,16 +192,15 @@ bool processNote(const Elf_Note<ELFT> &Note, DataMeta *MetaP,
 }
 
 template <class ELFT>
-amd_comgr_status_t getElfMetadataRoot(const ELFObjectFile<ELFT> *Obj,
-                                      DataMeta *MetaP) {
+llvm::Error getElfMetadataRoot(const ELFObjectFile<ELFT> *Obj,
+                               DataMeta *MetaP) {
   bool Found = false;
   llvm::msgpack::DocNode Root;
   const ELFFile<ELFT> &ELFFile = Obj->getELFFile();
 
   auto ProgramHeadersOrError = ELFFile.program_headers();
-  if (errorToBool(ProgramHeadersOrError.takeError())) {
-    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
-  }
+  if (!ProgramHeadersOrError)
+    return ProgramHeadersOrError.takeError();
 
   for (const auto &Phdr : *ProgramHeadersOrError) {
     if (Phdr.p_type != ELF::PT_NOTE) {
@@ -209,21 +213,19 @@ amd_comgr_status_t getElfMetadataRoot(const ELFObjectFile<ELFT> *Obj,
       }
     }
 
-    if (errorToBool(std::move(Err))) {
-      return AMD_COMGR_STATUS_ERROR;
-    }
+    if (Err)
+      return Err;
   }
 
   if (Found) {
     MetaP->MetaDoc->Document.getRoot() = Root;
     MetaP->DocNode = MetaP->MetaDoc->Document.getRoot();
-    return AMD_COMGR_STATUS_SUCCESS;
+    return Error::success();
   }
 
   auto SectionsOrError = ELFFile.sections();
-  if (errorToBool(SectionsOrError.takeError())) {
-    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
-  }
+  if (!SectionsOrError)
+    return SectionsOrError.takeError();
 
   for (const auto &Shdr : *SectionsOrError) {
     if (Shdr.sh_type != ELF::SHT_NOTE) {
@@ -236,28 +238,23 @@ amd_comgr_status_t getElfMetadataRoot(const ELFObjectFile<ELFT> *Obj,
       }
     }
 
-    if (errorToBool(std::move(Err))) {
-      return AMD_COMGR_STATUS_ERROR;
-    }
+    if (Err)
+      return Err;
   }
 
   if (Found) {
     MetaP->MetaDoc->Document.getRoot() = Root;
     MetaP->DocNode = MetaP->MetaDoc->Document.getRoot();
-    return AMD_COMGR_STATUS_SUCCESS;
+    return Error::success();
   }
 
-  return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  return createStringError(inconvertibleErrorCode(),
+                           "no AMDGPU metadata note found in code object");
 }
 } // namespace
 
-amd_comgr_status_t getMetadataRoot(DataObject *DataP, DataMeta *MetaP) {
-  auto ObjOrErr = getELFObjectFileBase(DataP);
-  if (errorToBool(ObjOrErr.takeError())) {
-    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
-  }
-  auto *Obj = ObjOrErr->get();
-
+namespace {
+llvm::Error getMetadataRoot(ELFObjectFileBase *Obj, DataMeta *MetaP) {
   if (auto *ELF32LE = dyn_cast<ELF32LEObjectFile>(Obj)) {
     return getElfMetadataRoot(ELF32LE, MetaP);
   }
@@ -269,6 +266,27 @@ amd_comgr_status_t getMetadataRoot(DataObject *DataP, DataMeta *MetaP) {
   }
   auto *ELF64BE = dyn_cast<ELF64BEObjectFile>(Obj);
   return getElfMetadataRoot(ELF64BE, MetaP);
+}
+} // namespace
+
+amd_comgr_status_t getMetadataRoot(DataObject *DataP, DataMeta *MetaP) {
+  auto ObjOrErr = getELFObjectFileBase(DataP);
+  if (errorToBool(ObjOrErr.takeError())) {
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  }
+  // The internal walker preserves the underlying LLVM error; the DataObject
+  // boundary keeps the historical status-only contract, so map any failure
+  // (malformed input or an absent note) to a single invalid-argument status.
+  if (errorToBool(getMetadataRoot(ObjOrErr->get(), MetaP)))
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  return AMD_COMGR_STATUS_SUCCESS;
+}
+
+llvm::Error getMetadataRoot(MemoryBufferRef MB, DataMeta *MetaP) {
+  auto ObjOrErr = getELFObjectFileBase(MB);
+  if (!ObjOrErr)
+    return ObjOrErr.takeError();
+  return getMetadataRoot(ObjOrErr->get(), MetaP);
 }
 
 struct IsaInfo {
@@ -407,24 +425,56 @@ amd_comgr_status_t getElfIsaNameFromElfHeader(const ELFObjectFile<ELFT> *Obj,
 }
 } // namespace
 
-amd_comgr_status_t getElfIsaName(DataObject *DataP, std::string &IsaName) {
-  auto ObjOrErr = getELFObjectFileBase(DataP);
-  if (errorToBool(ObjOrErr.takeError())) {
-    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
-  }
-  auto *Obj = ObjOrErr->get();
+Expected<std::string> getElfIsaName(MemoryBufferRef MB) {
+  auto ObjOrErr = getELFObjectFileBase(MB);
+  if (!ObjOrErr)
+    return ObjOrErr.takeError();
 
-  if (auto *ELF64LE = dyn_cast<ELF64LEObjectFile>(Obj))
-    return getElfIsaNameFromElfHeader(ELF64LE, IsaName);
-  else
-    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  auto *ELF64LE = dyn_cast<ELF64LEObjectFile>(ObjOrErr->get());
+  if (!ELF64LE)
+    return createStringError(inconvertibleErrorCode(),
+                             "code object is not a 64-bit little-endian ELF");
+
+  std::string IsaName;
+  if (getElfIsaNameFromElfHeader(ELF64LE, IsaName) != AMD_COMGR_STATUS_SUCCESS)
+    return createStringError(inconvertibleErrorCode(),
+                             "failed to derive ISA name from ELF header");
+  return IsaName;
 }
 
-amd_comgr_status_t getIsaIndex(StringRef IsaString, size_t &Index) {
-  auto IsaName = IsaString.take_until([](char C) { return C == ':'; });
+amd_comgr_status_t getElfIsaName(DataObject *DataP, std::string &IsaName) {
+  auto IsaOrErr =
+      getElfIsaName(MemoryBufferRef(StringRef(DataP->Data, DataP->Size), ""));
+  if (!IsaOrErr) {
+    consumeError(IsaOrErr.takeError());
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  }
+  IsaName = std::move(*IsaOrErr);
+  return AMD_COMGR_STATUS_SUCCESS;
+}
+
+amd_comgr_status_t getIsaIndex(StringRef TargetIDString, size_t &Index,
+                               StringRef *Processor) {
+  // Validate the target ID and resolve the processor (derived from the subarch
+  // when the name omits it).
+  std::optional<AMDGPU::TargetID> TID =
+      AMDGPU::TargetID::parseTargetIDString(TargetIDString);
+  if (!TID || TID->getGPUKind() == AMDGPU::GK_NONE) {
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  }
+
+  StringRef CanonicalProcessor = AMDGPU::getArchNameAMDGCN(TID->getGPUKind());
+  if (Processor) {
+    *Processor = CanonicalProcessor;
+  }
+
+  // Match by processor only; TargetID already validated the rest of the triple,
+  // so the vendor/os/environ are not checked against the table (which stores an
+  // empty environment).
   auto *IsaIterator = std::find_if(
-      std::begin(IsaInfos), std::end(IsaInfos),
-      [&](const IsaInfo &IsaInfo) { return IsaName == IsaInfo.IsaName; });
+      std::begin(IsaInfos), std::end(IsaInfos), [&](const IsaInfo &IsaInfo) {
+        return CanonicalProcessor == IsaInfo.Processor;
+      });
   if (IsaIterator == std::end(IsaInfos)) {
     return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
   }
@@ -729,4 +779,47 @@ amd_comgr_status_t lookUpCodeObject(DataObject *DataP,
 }
 
 } // namespace metadata
+
+amd_comgr_status_t parseTargetIdentifier(StringRef IdentStr,
+                                         TargetIdentifier &Ident) {
+  SmallVector<StringRef, 5> IsaNameComponents;
+  IdentStr.split(IsaNameComponents, '-', 4);
+  if (IsaNameComponents.size() != 5) {
+    return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+  }
+
+  Ident.Arch = IsaNameComponents[0];
+  Ident.Vendor = IsaNameComponents[1];
+  Ident.OS = IsaNameComponents[2];
+  Ident.Environ = IsaNameComponents[3];
+
+  Ident.Features.clear();
+  IsaNameComponents[4].split(Ident.Features, ':');
+
+  Ident.Processor = Ident.Features[0];
+  Ident.Features.erase(Ident.Features.begin());
+
+  if (IdentStr == "spirv64-amd-amdhsa--amdgcnspirv" ||
+      IdentStr == "spirv64-amd-amdhsa-unknown-amdgcnspirv") {
+    // Features not supported for SPIR-V
+    if (!Ident.Features.empty())
+      return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+    return AMD_COMGR_STATUS_SUCCESS;
+  }
+
+  size_t IsaIndex;
+  amd_comgr_status_t Status = metadata::getIsaIndex(IdentStr, IsaIndex);
+  if (Status != AMD_COMGR_STATUS_SUCCESS) {
+    return Status;
+  }
+
+  for (auto Feature : Ident.Features) {
+    if (!metadata::isSupportedFeature(IsaIndex, Feature)) {
+      return AMD_COMGR_STATUS_ERROR_INVALID_ARGUMENT;
+    }
+  }
+
+  return AMD_COMGR_STATUS_SUCCESS;
+}
+
 } // namespace COMGR
